@@ -360,13 +360,22 @@ post_update() {
             rm -f "$DEPLOY_ROOT/backend/public/install.php"
         fi
         
-        # 清理 Laravel 缓存
+        # 优化 Composer 自动加载
         cd "$DEPLOY_ROOT/backend"
+        log_info "优化 Composer 自动加载..."
+        composer dump-autoload --optimize --no-dev
+        
+        # 运行包发现
+        php artisan package:discover --ansi
+        
+        # 清理 Laravel 缓存
+        log_info "清理并优化 Laravel 缓存..."
         php artisan cache:clear
         php artisan config:clear
         php artisan route:clear
         php artisan view:clear
         php artisan optimize
+        
         cd "$SCRIPT_ROOT"
     fi
     
