@@ -24,12 +24,37 @@ detect_system() {
         . /etc/os-release
         OS=$ID
         VER=$VERSION_ID
+        OS_LIKE=$ID_LIKE
+    elif [ -f /etc/redhat-release ]; then
+        OS="centos"
+        VER=$(cat /etc/redhat-release | grep -oE '[0-9]+\.[0-9]+' | head -1)
     else
         log_error "无法检测系统类型"
         exit 1
     fi
     
-    log_info "检测到系统: $OS $VER"
+    # 确定包管理器
+    if command -v apt-get &> /dev/null; then
+        PKG_MANAGER="apt"
+        PKG_UPDATE="apt-get update"
+        PKG_INSTALL="apt-get install -y"
+        PHP_PKG_PREFIX="php8.3"
+    elif command -v yum &> /dev/null; then
+        PKG_MANAGER="yum"
+        PKG_UPDATE="yum update -y"
+        PKG_INSTALL="yum install -y"
+        PHP_PKG_PREFIX="php"
+    elif command -v dnf &> /dev/null; then
+        PKG_MANAGER="dnf"
+        PKG_UPDATE="dnf update -y"
+        PKG_INSTALL="dnf install -y"
+        PHP_PKG_PREFIX="php"
+    else
+        log_error "不支持的包管理器"
+        exit 1
+    fi
+    
+    log_info "检测到系统: $OS $VER，包管理器: $PKG_MANAGER"
 }
 
 # 检测是否为宝塔环境
@@ -107,18 +132,37 @@ check_php_extensions() {
     fi
 }
 
+# 安装PHP根据系统类型
+install_php_for_system() {
+    case "$PKG_MANAGER" in
+        apt)
+            install_php_ubuntu
+            ;;
+        yum)
+            install_php_centos
+            ;;
+        dnf)
+            install_php_fedora
+            ;;
+        *)
+            log_error "不支持的系统"
+            exit 1
+            ;;
+    esac
+}
+
 # 安装PHP (Ubuntu/Debian)
 install_php_ubuntu() {
     log_info "在 Ubuntu/Debian 上安装 PHP 8.3..."
     
     # 添加 PHP PPA
-    sudo apt-get update
-    sudo apt-get install -y software-properties-common
+    sudo $PKG_UPDATE
+    sudo $PKG_INSTALL software-properties-common
     sudo add-apt-repository -y ppa:ondrej/php
-    sudo apt-get update
+    sudo $PKG_UPDATE
     
     # 安装 PHP 8.3 和扩展
-    sudo apt-get install -y \
+    sudo $PKG_INSTALL \
         php8.3-cli \
         php8.3-fpm \
         php8.3-bcmath \
@@ -147,26 +191,51 @@ install_php_centos() {
     log_info "在 CentOS/RHEL 上安装 PHP 8.3..."
     
     # 安装 EPEL 和 Remi 仓库
-    sudo yum install -y epel-release
-    sudo yum install -y https://rpms.remirepo.net/enterprise/remi-release-${VER}.rpm
+    sudo $PKG_INSTALL epel-release
+    sudo $PKG_INSTALL "https://rpms.remirepo.net/enterprise/remi-release-${VER}.rpm" || true
     
     # 启用 PHP 8.3 模块
-    sudo yum module reset php -y
-    sudo yum module enable php:remi-8.3 -y
+    sudo yum module reset php -y || true
+    sudo yum module enable php:remi-8.3 -y || true
     
     # 安装 PHP 8.3 和扩展
-    sudo yum install -y \
+    sudo $PKG_INSTALL \
         php \
         php-cli \
         php-fpm \
         php-bcmath \
         php-common \
         php-curl \
-        php-dom \
-        php-fileinfo \
         php-mbstring \
         php-mysqlnd \
-        php-tokenizer \
+        php-xml \
+        php-zip \
+        php-gd \
+        php-intl \
+        php-redis \
+        php-opcache
+    
+    # 启用 PHP-FPM
+    sudo systemctl enable php-fpm
+    sudo systemctl start php-fpm
+    
+    log_success "PHP 8.3 安装完成"
+}
+
+# 安装PHP (Fedora)
+install_php_fedora() {
+    log_info "在 Fedora 上安装 PHP 8.3..."
+    
+    # 安装 PHP 8.3 和扩展
+    sudo $PKG_INSTALL \
+        php \
+        php-cli \
+        php-fpm \
+        php-bcmath \
+        php-common \
+        php-curl \
+        php-mbstring \
+        php-mysqlnd \
         php-xml \
         php-zip \
         php-gd \
@@ -260,25 +329,37 @@ configure_php() {
 install_other_deps() {
     log_info "安装其他必要依赖..."
     
-    if [ "$OS" == "ubuntu" ] || [ "$OS" == "debian" ]; then
-        sudo apt-get install -y \
-            curl \
-            git \
-            unzip \
-            supervisor \
-            redis-server
-    elif [ "$OS" == "centos" ] || [ "$OS" == "rhel" ]; then
-        sudo yum install -y \
-            curl \
-            git \
-            unzip \
-            supervisor \
-            redis
-    fi
+    case "$PKG_MANAGER" in
+        apt)
+            sudo $PKG_INSTALL \
+                curl \
+                git \
+                unzip \
+                supervisor \
+                redis-server
+            ;;
+        yum|dnf)
+            sudo $PKG_INSTALL \
+                curl \
+                git \
+                unzip \
+                supervisor \
+                redis
+            ;;
+        *)
+            log_error "不支持的包管理器: $PKG_MANAGER"
+            return 1
+            ;;
+    esac
     
-    # 启动 Redis
-    sudo systemctl enable redis
-    sudo systemctl start redis
+    # 启动 Redis（根据系统调整服务名）
+    if [ "$PKG_MANAGER" = "apt" ]; then
+        sudo systemctl enable redis-server
+        sudo systemctl start redis-server
+    else
+        sudo systemctl enable redis
+        sudo systemctl start redis
+    fi
     
     log_success "其他依赖安装完成"
 }
@@ -300,18 +381,7 @@ main() {
         if ! check_php_version || ! check_php_extensions; then
             log_info "开始安装 PHP 8.3..."
             
-            case "$OS" in
-                ubuntu|debian)
-                    install_php_ubuntu
-                    ;;
-                centos|rhel)
-                    install_php_centos
-                    ;;
-                *)
-                    log_error "不支持的系统: $OS"
-                    exit 1
-                    ;;
-            esac
+            install_php_for_system
             
             # 配置 PHP
             configure_php
