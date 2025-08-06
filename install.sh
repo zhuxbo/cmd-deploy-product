@@ -167,11 +167,18 @@ initialize_laravel() {
     mkdir -p storage/{app/public,framework/{cache,sessions,views},logs}
     mkdir -p bootstrap/cache
     
+    # 优化自动加载
+    log_info "优化 Composer 自动加载..."
+    composer dump-autoload --optimize --no-dev
+    
     # 创建存储链接
     if [ -L "public/storage" ]; then
         rm public/storage
     fi
     php artisan storage:link
+    
+    # 运行包发现
+    php artisan package:discover --ansi
     
     log_success "Laravel 初始化完成"
     
