@@ -305,12 +305,10 @@ main() {
     echo
     deploy_files
     
-    # 更新nginx配置
-    echo
+    # 更新nginx配置 静默
     update_nginx_config
     
-    # 初始化Laravel
-    echo
+    # 初始化Laravel 静默
     initialize_laravel
     
     # 设置权限
@@ -365,8 +363,7 @@ main() {
     # 宝塔面板特殊提示（放在最后）
     if check_bt_panel; then
         echo
-        log_warning "=== 宝塔面板特殊配置提示 ==="
-        log_warning "请在宝塔面板中手动完成以下配置："
+        log_warning "=== 请在宝塔面板中手动完成以下配置 ==="
         echo
         log_warning "1. 定时任务："
         log_warning "   任务类型 Shell脚本"
@@ -378,8 +375,12 @@ main() {
         log_warning "   启动用户 www"
         log_warning "   启动命令 php artisan queue:work --queue Task"
         log_warning "   进程目录 $SITE_ROOT/backend"
-        log_warning "========================="
+        log_warning "================================="
     fi
+    
+    # 安装流程完成提示
+    echo
+    log_success "===== 安装流程已完成 ====="
 }
 
 # 执行主函数

@@ -508,6 +508,7 @@ select_bt_php_version() {
     else
         # 多个版本，让用户选择
         log_info "检测到多个可用的 PHP 版本："
+        echo
         for i in "${!BT_PHP_VERSIONS[@]}"; do
             local ver="${BT_PHP_VERSIONS[i]}"
             echo "  $((i+1)). PHP 8.${ver: -1} (/www/server/php/$ver/bin/php)"
@@ -527,9 +528,28 @@ select_bt_php_version() {
     fi
 }
 
-# 安装宝塔可自动处理的扩展
+
+# 安装宝塔环境下可自动处理的扩展
 install_bt_auto_extensions() {
-    # 静默检查，不输出信息
+    if ! check_bt_panel || [ -z "$PHP_VERSION" ]; then
+        return 1
+    fi
+    
+    # 宝塔环境下通过命令行可以安装的扩展
+    local auto_extensions=("opcache" "curl" "openssl" "zip")
+    local installed_any=false
+    
+    for ext in "${auto_extensions[@]}"; do
+        if ! $PHP_CMD -m 2>/dev/null | grep -qi "^$ext$"; then
+            # 尝试通过宝塔命令安装（如果可用）
+            if command -v bt >/dev/null 2>&1; then
+                if bt php install_ext "$PHP_VERSION" "$ext" >/dev/null 2>&1; then
+                    installed_any=true
+                fi
+            fi
+        fi
+    done
+    
     return 0
 }
 
@@ -537,6 +557,7 @@ install_bt_auto_extensions() {
 handle_bt_panel() {
     # 选择PHP版本
     if select_bt_php_version; then
+        echo
         log_success "检测到 PHP 8.${PHP_VERSION: -1}"
         
         # 1. 处理PHP函数
@@ -550,7 +571,10 @@ handle_bt_panel() {
             fi
         fi
         
-        # 2. 检查扩展
+        # 2. 尝试安装可自动处理的扩展
+        install_bt_auto_extensions
+        
+        # 3. 检查需要手动安装的扩展
         local missing_manual_extensions=()
         local manual_extensions=("calendar" "fileinfo" "mbstring" "redis")
         
@@ -560,7 +584,7 @@ handle_bt_panel() {
             fi
         done
         
-        # 3. 输出结果
+        # 4. 输出结果
         if [ "$functions_ok" = true ] && [ ${#missing_manual_extensions[@]} -eq 0 ]; then
             log_success "PHP环境检查通过"
             return 0
@@ -590,9 +614,6 @@ handle_bt_panel() {
         log_warning "   - 安装完PHP后，按上述步骤配置函数和扩展"
         log_warning "====================================="
     fi
-    
-    # 安装流程已完整执行，无需用户再次确认
-    log_info "安装流程已完成。如需验证配置，请重新运行此脚本。"
 }
 
 # 宝塔环境自动启用PHP函数
@@ -1116,14 +1137,11 @@ show_summary() {
 
 # 主函数
 main() {
-    log_info "============================================"
-    log_info "证书管理系统运行环境依赖安装"
-    log_info "专注于PHP扩展、函数和Composer版本检查"
-    log_info "============================================"
-    
     # 检测系统
+    echo
     detect_system
-    
+
+    echo
     # 检测宝塔环境
     if check_bt_panel; then
         log_info "检测到宝塔面板环境"
@@ -1173,33 +1191,6 @@ main() {
     # 给出最终提示
     echo
     log_success "环境检查完成"
-    
-    # 简化检查，只给出友好提示
-    if check_bt_panel; then
-        # 检查缺失的手动安装扩展
-        local missing_extensions=()
-        local manual_extensions=("calendar" "fileinfo" "mbstring" "redis")
-        
-        for ext in "${manual_extensions[@]}"; do
-            if ! $PHP_CMD -m 2>/dev/null | grep -qi "^$ext$"; then
-                missing_extensions+=("$ext")
-            fi
-        done
-        
-        if [ ${#missing_extensions[@]} -gt 0 ]; then
-            echo
-            log_warning "请在宝塔面板安装扩展: ${missing_extensions[*]}"
-            log_info "安装方法: 软件商店 -> PHP -> 安装扩展"
-        fi
-        
-        if ! check_php_functions >/dev/null 2>&1; then
-            echo
-            log_warning "请在宝塔面板启用PHP函数: exec, putenv, pcntl_signal, pcntl_alarm"
-            log_info "配置方法: PHP设置 -> 禁用函数"
-        fi
-    fi
-    
-    # 不再使用exit 1，让安装流程继续
 }
 
 # 执行主函数
