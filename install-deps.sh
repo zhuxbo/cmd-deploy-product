@@ -457,72 +457,125 @@ install_php_for_system() {
 # 宝塔面板环境处理
 handle_bt_panel() {
     log_warning "=== 宝塔面板环境检测到 ==="
-    log_info "正在检查宝塔面板中的 PHP 安装情况..."
+    log_info "正在检查宝塔面板中的 PHP 8.3+ 安装情况..."
     
-    # 检查宝塔PHP安装
+    # 只检查 PHP 8.3+ 版本
     BT_PHP_VERSIONS=()
-    for ver in 83 82 81 80 74 73; do
-        if [ -d "/www/server/php/$ver" ]; then
+    PHP_CMD=""
+    
+    # 按优先级检查 8.5, 8.4, 8.3
+    for ver in 85 84 83; do
+        if [ -d "/www/server/php/$ver" ] && [ -x "/www/server/php/$ver/bin/php" ]; then
             BT_PHP_VERSIONS+=("$ver")
+            # 使用找到的最高版本
+            if [ -z "$PHP_CMD" ]; then
+                PHP_CMD="/www/server/php/$ver/bin/php"
+                PHP_VERSION="$ver"
+            fi
         fi
     done
     
-    if [ ${#BT_PHP_VERSIONS[@]} -gt 0 ]; then
-        log_info "已安装的 PHP 版本: ${BT_PHP_VERSIONS[*]}"
+    if [ -n "$PHP_CMD" ]; then
+        log_success "检测到 PHP 8.$((PHP_VERSION/10))，设置为默认版本..."
+        log_info "PHP 路径: $PHP_CMD"
         
-        # 检查是否有8.3+
-        if [[ " ${BT_PHP_VERSIONS[@]} " =~ " 83 " ]]; then
-            log_success "检测到 PHP 8.3，设置为默认版本..."
-            PHP_CMD="/www/server/php/83/bin/php"
-            
-            # 检查扩展
-            if check_php_extensions; then
-                log_success "PHP 环境满足要求"
-                return 0
-            else
-                log_warning "部分扩展缺失，请在宝塔面板中安装"
-            fi
+        # 1. 首先处理PHP函数问题
+        echo
+        log_info "检查PHP函数可用性..."
+        if ! check_php_functions; then
+            log_warning "部分PHP函数被禁用，需要在宝塔面板中启用"
+            log_warning "请在PHP设置的【禁用函数】中移除："
+            log_warning "exec, putenv, pcntl_signal, pcntl_alarm, proc_open"
+            echo
         else
-            log_warning "未检测到 PHP 8.3+"
+            log_success "所有必需的PHP函数已启用"
         fi
+        
+        # 2. 最后检查扩展
+        echo
+        log_info "检查PHP扩展..."
+        if check_php_extensions; then
+            log_success "所有必需的PHP扩展已安装"
+            return 0
+        else
+            log_warning "部分扩展缺失，请在宝塔面板中安装"
+        fi
+    else
+        log_warning "未检测到 PHP 8.3 或更高版本"
     fi
     
-    log_warning ""
-    log_warning "请按以下步骤在宝塔面板中配置 PHP："
-    log_warning "1. 登录宝塔面板"
-    log_warning "2. 进入【软件商店】->【运行环境】"
-    log_warning "3. 安装 PHP 8.3"
-    log_warning "4. 点击 PHP 8.3 的【设置】"
-    log_warning "5. 在【安装扩展】中安装以下扩展："
-    log_warning "   宝塔面板需要手动安装的扩展："
-    log_warning "   - calendar（必需）- 日历功能"
-    log_warning "   - fileinfo（必需）- 文件类型检测"
-    log_warning "   - mbstring（必需）- 多字节字符串处理"
-    log_warning "   - redis（必需）- Redis缓存支持"
-    log_warning "   推荐安装的扩展："
-    log_warning "   - opcache（性能优化）- PHP字节码缓存"
-    log_warning "   - intl（国际化支持）- 国际化扩展"
-    log_warning "6. 在网站设置中选择 PHP 8.3"
-    log_warning "7. 检查PHP函数是否被禁用（参考后续提示）"
-    log_warning ""
-    log_warning "提示：bcmath, ctype, curl, dom, gd, iconv, json, openssl, pcntl"
+    echo
+    log_warning "=== 宝塔面板配置指引 ==="
+    
+    if [ -z "$PHP_CMD" ]; then
+        log_warning "1. 【安装PHP】"
+        log_warning "   - 登录宝塔面板"
+        log_warning "   - 进入【软件商店】->【运行环境】"
+        log_warning "   - 安装 PHP 8.3 或更高版本"
+        echo
+    fi
+    
+    log_warning "2. 【PHP函数配置】"
+    log_warning "   - 点击 PHP 8.3+ 的【设置】"
+    log_warning "   - 进入【禁用函数】选项卡"
+    log_warning "   - 从禁用列表中移除以下函数："
+    log_warning "     exec, putenv, pcntl_signal, pcntl_alarm, proc_open"
+    echo
+    
+    log_warning "3. 【PHP扩展安装】"
+    log_warning "   - 在PHP设置中点击【安装扩展】"
+    log_warning "   - 安装以下必需扩展："
+    log_warning "     * calendar - 日历功能"
+    log_warning "     * fileinfo - 文件类型检测"
+    log_warning "     * mbstring - 多字节字符串"
+    log_warning "     * redis - Redis缓存"
+    log_warning "   - 推荐安装："
+    log_warning "     * opcache - 性能优化"
+    log_warning "     * intl - 国际化支持"
+    echo
+    
+    log_warning "4. 【网站PHP版本】"
+    log_warning "   - 在网站设置中选择 PHP 8.3+"
+    echo
+    
+    log_warning "提示：bcmath, ctype, curl, dom, gd, iconv, json, openssl"
     log_warning "     pdo, pdo_mysql, tokenizer, xml, zip 通常已默认安装"
-    log_warning ""
-    log_warning "PHP函数检查：如果后续检查发现函数被禁用，"
-    log_warning "请在宝塔面板PHP设置中移除禁用函数列表中的："
-    log_warning "exec, putenv, pcntl_signal, pcntl_alarm, proc_open"
-    log_warning "============================="
+    log_warning "========================="
     
     read -p "是否已完成上述配置？(y/n): " -n 1 -r
     echo
     if [[ $REPLY =~ ^[Yy]$ ]]; then
-        # 重新检测
-        PHP_CMD="/www/server/php/83/bin/php"
-        if [ -x "$PHP_CMD" ] && check_php_extensions; then
-            log_success "PHP 环境配置完成"
-            return 0
+        # 重新检测PHP版本和路径
+        PHP_CMD=""
+        for ver in 85 84 83; do
+            if [ -x "/www/server/php/$ver/bin/php" ]; then
+                PHP_CMD="/www/server/php/$ver/bin/php"
+                PHP_VERSION="$ver"
+                break
+            fi
+        done
+        
+        if [ -n "$PHP_CMD" ]; then
+            log_success "重新检测到 PHP 8.$((PHP_VERSION/10))"
+            
+            # 1. 先检查函数
+            log_info "验证PHP函数..."
+            if ! check_php_functions; then
+                log_error "PHP函数检查未通过，请确保已正确移除禁用函数"
+                exit 1
+            fi
+            
+            # 2. 再检查扩展
+            log_info "验证PHP扩展..."
+            if check_php_extensions; then
+                log_success "PHP 环境配置完成"
+                return 0
+            else
+                log_error "PHP扩展检查未通过，请确保已安装所有必需扩展"
+                exit 1
+            fi
         else
-            log_error "PHP 环境仍不满足要求，请检查配置"
+            log_error "仍未检测到 PHP 8.3+，请确保已正确安装"
             exit 1
         fi
     else
