@@ -47,12 +47,12 @@ trap cleanup EXIT INT TERM
 
 # 更新模块
 UPDATE_MODULE="${1:-all}"
-VALID_MODULES=("api" "admin" "user" "easy" "all")
+VALID_MODULES=("api" "admin" "user" "easy" "nginx" "all")
 
 if [[ ! " ${VALID_MODULES[@]} " =~ " ${UPDATE_MODULE} " ]]; then
     log_error "无效的更新模块: $UPDATE_MODULE"
     log_info "有效的模块: ${VALID_MODULES[*]}"
-    log_info "用法: $0 [all|api|admin|user|easy]"
+    log_info "用法: $0 [all|api|admin|user|easy|nginx]"
     exit 1
 fi
 
@@ -169,6 +169,11 @@ backup_current() {
         api)
             if [ -d "$SITE_ROOT/backend" ]; then
                 cp -r "$SITE_ROOT/backend" "$BACKUP_PATH/"
+            fi
+            ;;
+        nginx)
+            if [ -d "$SITE_ROOT/nginx" ]; then
+                cp -r "$SITE_ROOT/nginx" "$BACKUP_PATH/"
             fi
             ;;
         admin|user|easy)
@@ -289,6 +294,15 @@ deploy_new_files() {
             fi
             ;;
             
+        nginx)
+            # 仅更新 Nginx 配置
+            if [ -d "$SOURCE_PATH/nginx" ]; then
+                log_info "更新 Nginx 配置..."
+                rm -rf "$SITE_ROOT/nginx"
+                cp -r "$SOURCE_PATH/nginx" "$SITE_ROOT/"
+            fi
+            ;;
+            
         admin|user|easy)
             # 更新特定前端
             if [ -d "$SOURCE_PATH/frontend/$UPDATE_MODULE" ]; then
@@ -365,7 +379,7 @@ optimize_backend() {
 
 # 更新 Nginx 配置路径
 update_nginx_config() {
-    if [ "$UPDATE_MODULE" = "all" ] && [ -f "$SITE_ROOT/nginx/manager.conf" ]; then
+    if ([ "$UPDATE_MODULE" = "all" ] || [ "$UPDATE_MODULE" = "nginx" ]) && [ -f "$SITE_ROOT/nginx/manager.conf" ]; then
         log_info "更新 Nginx 配置路径..."
         sed -i "s|__PROJECT_ROOT__|$SITE_ROOT|g" "$SITE_ROOT/nginx/manager.conf"
         log_success "Nginx 配置路径已更新"
@@ -450,8 +464,8 @@ set_permissions() {
         fi
     done
     
-    # 设置nginx目录权限（仅在全量更新时）
-    if [ "$UPDATE_MODULE" = "all" ] && [ -d "$SITE_ROOT/nginx" ]; then
+    # 设置nginx目录权限
+    if ([ "$UPDATE_MODULE" = "all" ] || [ "$UPDATE_MODULE" = "nginx" ]) && [ -d "$SITE_ROOT/nginx" ]; then
         log_info "设置nginx目录权限..."
         sudo chown -R "$SITE_OWNER:$SITE_GROUP" "$SITE_ROOT/nginx"
         sudo chmod -R 755 "$SITE_ROOT/nginx"
@@ -477,8 +491,8 @@ reload_services() {
         log_warning "- 重启 PHP-FPM"
         log_warning "- 重启队列守护进程"
     else
-        # 重载 Nginx（在更新前端或全量更新时）
-        if [ "$UPDATE_MODULE" = "all" ] || [ "$UPDATE_MODULE" = "admin" ] || [ "$UPDATE_MODULE" = "user" ] || [ "$UPDATE_MODULE" = "easy" ]; then
+        # 重载 Nginx（只在更新后端API或Nginx配置时）
+        if [ "$UPDATE_MODULE" = "all" ] || [ "$UPDATE_MODULE" = "api" ] || [ "$UPDATE_MODULE" = "nginx" ]; then
             NGINX_RELOAD=$(jq -r '.services.nginx.reload_command' "$CONFIG_FILE")
             if eval "$NGINX_RELOAD" 2>/dev/null; then
                 log_success "Nginx 已重载"
