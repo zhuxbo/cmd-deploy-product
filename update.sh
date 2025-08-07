@@ -297,10 +297,15 @@ optimize_backend() {
             log_info "优化 Composer 自动加载..."
             # 获取站点所有者
             SITE_OWNER=$(stat -c "%U" "$SITE_ROOT")
-            sudo -u "$SITE_OWNER" composer dump-autoload --optimize --no-dev
-            log_info "已完成自动加载优化（包发现已通过post-autoload-dump自动执行）"
+            if sudo -u "$SITE_OWNER" composer dump-autoload --optimize --no-dev 2>/dev/null; then
+                log_success "自动加载优化完成（包发现已自动执行）"
+            else
+                log_warning "自动加载优化失败，但不影响应用运行"
+                log_info "Laravel 将使用基础自动加载器，性能可能稍有影响"
+            fi
         else
             log_warning "Composer 未安装，跳过自动加载优化"
+            log_info "Laravel 将使用基础自动加载器"
         fi
         
         # 清理并优化 Laravel 缓存
