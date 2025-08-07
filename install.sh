@@ -159,13 +159,7 @@ update_nginx_config() {
         log_success "Nginx 配置更新完成"
         
         if check_bt_panel; then
-            log_warning "=== 宝塔面板 Nginx 配置 ==="
-            log_warning "请在宝塔面板中："
-            log_warning "1. 进入网站设置"
-            log_warning "2. 选择【配置文件】"
-            log_warning "3. 将以下内容添加到配置中："
-            log_warning "   include $NGINX_CONF;"
-            log_warning "4. 保存并重载配置"
+            log_info "宝塔环境检测到，请在安装完成后手动配置 Nginx"
         else
             log_info "自动配置 Nginx..."
             # 检查 sites-enabled 目录
@@ -210,10 +204,12 @@ initialize_laravel() {
     mkdir -p storage/{app/public,framework/{cache,sessions,views},logs}
     mkdir -p bootstrap/cache
     
-    # 优化自动加载
+    # 优化自动加载（使用站点所有者执行）
     log_info "优化 Composer 自动加载..."
     if command -v composer &> /dev/null; then
-        composer dump-autoload --optimize --no-dev
+        # 获取站点所有者
+        SITE_OWNER=$(stat -c "%U" "$SITE_ROOT")
+        sudo -u "$SITE_OWNER" composer dump-autoload --optimize --no-dev
     else
         log_warning "Composer 未安装，跳过优化"
     fi
@@ -488,14 +484,6 @@ main() {
     log_info "3. 访问安装向导: http://your-domain/install.php"
     log_info "4. 完成后删除: rm $SITE_ROOT/backend/public/install.php"
     
-    if check_bt_panel; then
-        echo
-        log_warning "宝塔面板用户请确保完成："
-        log_warning "- Nginx 配置引入"
-        log_warning "- 定时任务添加"
-        log_warning "- 队列守护进程配置"
-    fi
-    
     # 询问是否执行依赖安装
     echo
     log_info "运行环境检查："
@@ -517,6 +505,33 @@ main() {
         fi
     else
         log_info "跳过依赖安装，请确保已安装必需的运行环境"
+    fi
+    
+    # 宝塔面板特殊提示（放在最后）
+    if check_bt_panel; then
+        echo
+        log_warning "=== 宝塔面板特殊配置提示 ==="
+        log_warning "请在宝塔面板中手动完成以下配置："
+        echo
+        log_warning "1. Nginx 配置："
+        log_warning "   - 进入网站设置 -> 配置文件"
+        log_warning "   - 添加以下内容：include $SITE_ROOT/nginx/manager.conf;"
+        log_warning "   - 保存并重载配置"
+        echo
+        log_warning "2. 定时任务："
+        SITE_NAME=$(basename "$SITE_ROOT")
+        log_warning "   - 名称: Laravel-$SITE_NAME"
+        log_warning "   - 类型: Shell脚本"
+        log_warning "   - 周期: 每分钟"
+        log_warning "   - 内容: cd $SITE_ROOT/backend && php artisan schedule:run"
+        echo
+        log_warning "3. 队列守护进程："
+        log_warning "   - 进入软件商店 -> Supervisor管理器"
+        log_warning "   - 名称: laravel-worker-$SITE_NAME"
+        log_warning "   - 目录: $SITE_ROOT/backend"
+        log_warning "   - 命令: php artisan queue:work --sleep=3 --tries=3"
+        log_warning "   - 进程数: 2"
+        log_warning "============================"
     fi
 }
 
