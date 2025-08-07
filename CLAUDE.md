@@ -173,6 +173,9 @@ FORCE_UPDATE=1 ./update.sh
 │       └── config.json           # 保留
 ├── nginx/             # Nginx 配置
 ├── backup/            # 备份目录
+│   ├── install/       # 安装备份
+│   ├── update/        # 更新备份
+│   └── keeper/        # 数据备份
 ├── source/            # 源码缓存
 └── info.json          # 构建信息（包含版本）
 ```

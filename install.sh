@@ -25,7 +25,7 @@ SITE_ROOT="$(dirname "$SCRIPT_DIR")"
 # 源码目录
 SOURCE_DIR="$SCRIPT_DIR/source"
 # 备份目录
-BACKUP_DIR="$SITE_ROOT/backup/update"
+BACKUP_DIR="$SITE_ROOT/backup/install"
 
 # 生产代码仓库（使用HTTPS地址，避免SSH密钥问题）
 PRODUCTION_REPO="https://gitee.com/zhuxbo/production-code.git"

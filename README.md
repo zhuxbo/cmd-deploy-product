@@ -145,8 +145,9 @@ site-root/               # 站点根目录
 │   ├── keeper.sh        # 备份脚本
 │   └── update-config.json # 更新配置
 ├── backup/              # 备份目录
+│   ├── install/         # install.sh 的备份
 │   ├── keeper/          # keeper.sh 的备份
-│   └── update/          # install.sh 和 update.sh 的备份
+│   └── update/          # update.sh 的备份
 └── info.json            # 构建信息（包含版本）
 ```
 
@@ -206,6 +207,7 @@ jq -r '.version' ../info.json
 
 ## 故障排查
 
+- **安装失败**：检查 backup/install/ 目录中的备份进行恢复
 - **更新失败**：检查 backup/update/ 目录中的备份进行恢复
 - **权限错误**：确保 Web 用户（站点目录所有者）对 storage 和 bootstrap/cache 有写权限
 - **数据库连接**：检查 backend/.env 文件中的数据库配置
