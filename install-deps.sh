@@ -178,7 +178,7 @@ check_php_version() {
     fi
 }
 
-# 检查PHP函数
+# 检查PHP函数（宝塔环境特殊处理）
 check_php_functions() {
     log_info "检查PHP函数可用性..."
     
@@ -189,15 +189,44 @@ check_php_functions() {
     # 使用找到的PHP命令检测函数
     PHP_CMD=${PHP_CMD:-php}
     
-    # 检查必需函数
-    for func in "${required_functions[@]}"; do
-        if $PHP_CMD -r "echo function_exists('$func') && !in_array('$func', array_map('trim', explode(',', ini_get('disable_functions')))) ? 'yes' : 'no';" 2>/dev/null | grep -q "yes"; then
-            log_success "函数 $func: 可用"
-        else
-            log_error "函数 $func: 被禁用或不存在"
-            all_good=false
+    if check_bt_panel && [ -n "$PHP_VERSION" ]; then
+        # 宝塔环境：分别检查CLI和FPM配置
+        log_info "宝塔环境检测到，分别检查CLI和FPM的函数配置..."
+        
+        local cli_ini="/www/server/php/$PHP_VERSION/etc/php.ini"
+        local fpm_ini="/www/server/php/$PHP_VERSION/etc/php-fpm.conf"
+        # 实际的FPM配置文件可能在不同位置
+        if [ -f "/www/server/php/$PHP_VERSION/etc/php-fpm.ini" ]; then
+            fpm_ini="/www/server/php/$PHP_VERSION/etc/php-fpm.ini"
         fi
-    done
+        
+        log_info "检查CLI配置 ($cli_ini)..."
+        local cli_good=true
+        for func in "${required_functions[@]}"; do
+            if $PHP_CMD -r "echo function_exists('$func') && !in_array('$func', array_map('trim', explode(',', ini_get('disable_functions')))) ? 'yes' : 'no';" 2>/dev/null | grep -q "yes"; then
+                log_success "CLI函数 $func: 可用"
+            else
+                log_error "CLI函数 $func: 被禁用或不存在"
+                cli_good=false
+                all_good=false
+            fi
+        done
+        
+        # FPM配置检查需要通过Web访问或配置文件检查
+        log_info "FPM配置需要在宝塔面板中检查，CLI和FPM使用相同的禁用函数设置"
+        
+    else
+        # 标准环境：使用当前PHP命令检测
+        # 检查必需函数
+        for func in "${required_functions[@]}"; do
+            if $PHP_CMD -r "echo function_exists('$func') && !in_array('$func', array_map('trim', explode(',', ini_get('disable_functions')))) ? 'yes' : 'no';" 2>/dev/null | grep -q "yes"; then
+                log_success "函数 $func: 可用"
+            else
+                log_error "函数 $func: 被禁用或不存在"
+                all_good=false
+            fi
+        done
+    fi
     
     # 检查可选函数
     for func in "${optional_functions[@]}"; do
@@ -209,15 +238,20 @@ check_php_functions() {
     done
     
     if [ "$all_good" = false ]; then
-        log_warning "某些必需的PHP函数被禁用，请检查php.ini配置"
-        log_info "需要启用的函数: ${required_functions[*]}"
+        if check_bt_panel; then
+            log_warning "某些必需的PHP函数被禁用，需要在宝塔面板中处理CLI和FPM配置"
+            log_info "需要启用的函数: ${required_functions[*]}"
+        else
+            log_warning "某些必需的PHP函数被禁用，请检查php.ini配置"
+            log_info "需要启用的函数: ${required_functions[*]}"
+        fi
         return 1
     fi
     
     return 0
 }
 
-# 检测PHP扩展
+# 检测PHP扩展（宝塔环境特殊处理）
 check_php_extensions() {
     log_info "检测 PHP 扩展..."
     
@@ -248,6 +282,12 @@ check_php_extensions() {
     
     # 使用找到的PHP命令检测扩展
     PHP_CMD=${PHP_CMD:-php}
+    
+    if check_bt_panel && [ -n "$PHP_VERSION" ]; then
+        # 宝塔环境：CLI和FPM共享扩展，使用CLI检测即可
+        log_info "宝塔环境：扩展在CLI和FPM之间共享"
+    fi
+    
     for ext in "${REQUIRED_EXTENSIONS[@]}"; do
         if ! $PHP_CMD -m 2>/dev/null | grep -qi "^$ext$"; then
             MISSING_EXTENSIONS+=("$ext")
@@ -258,7 +298,11 @@ check_php_extensions() {
         log_success "所有必需的 PHP 扩展已安装"
         return 0
     else
-        log_warning "缺少以下 PHP 扩展: ${MISSING_EXTENSIONS[*]}"
+        if check_bt_panel; then
+            log_warning "缺少以下 PHP 扩展 (CLI和FPM共享): ${MISSING_EXTENSIONS[*]}"
+        else
+            log_warning "缺少以下 PHP 扩展: ${MISSING_EXTENSIONS[*]}"
+        fi
         return 1
     fi
 }
@@ -593,16 +637,20 @@ handle_bt_panel() {
         log_warning "=== 需要在宝塔面板中手工完成的配置 ==="
         
         if [ "$functions_ok" = false ]; then
-            log_warning "1. 【PHP函数启用】"
+            log_warning "1. 【PHP函数启用 - CLI和FPM都需要配置】"
             log_warning "   - 点击 PHP 8.${PHP_VERSION: -1} 的【设置】"
             log_warning "   - 进入【禁用函数】选项卡"
             log_warning "   - 从禁用列表中移除以下函数："
             log_warning "     exec, putenv, pcntl_signal, pcntl_alarm, proc_open"
+            log_warning "   - 注意：宝塔环境需要确保CLI和FPM都启用这些函数"
+            log_warning "   - 配置文件位置："
+            log_warning "     CLI: /www/server/php/${PHP_VERSION}/etc/php.ini"
+            log_warning "     FPM: 通过面板设置会同时生效"
             echo
         fi
         
         if [ ${#missing_manual_extensions[@]} -gt 0 ]; then
-            log_warning "2. 【PHP扩展安装】"
+            log_warning "2. 【PHP扩展安装 - CLI和FPM共享】"
             log_warning "   - 在PHP设置中点击【安装扩展】"
             log_warning "   - 安装以下必需扩展："
             for ext in "${missing_manual_extensions[@]}"; do
@@ -615,6 +663,7 @@ handle_bt_panel() {
             done
             log_warning "   - 推荐安装："
             log_warning "     * opcache - 性能优化"
+            log_warning "   - 注意：扩展安装后CLI和FPM会同时生效"
             echo
         fi
         
