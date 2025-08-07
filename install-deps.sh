@@ -454,29 +454,59 @@ install_php_for_system() {
     esac
 }
 
+# 选择宝塔PHP版本
+select_bt_php_version() {
+    # 检查可用的 PHP 8.3+ 版本
+    BT_PHP_VERSIONS=()
+    for ver in 85 84 83; do
+        if [ -d "/www/server/php/$ver" ] && [ -x "/www/server/php/$ver/bin/php" ]; then
+            BT_PHP_VERSIONS+=("$ver")
+        fi
+    done
+    
+    if [ ${#BT_PHP_VERSIONS[@]} -eq 0 ]; then
+        PHP_CMD=""
+        PHP_VERSION=""
+        return 1
+    elif [ ${#BT_PHP_VERSIONS[@]} -eq 1 ]; then
+        # 只有一个版本，直接使用
+        PHP_VERSION="${BT_PHP_VERSIONS[0]}"
+        PHP_CMD="/www/server/php/$PHP_VERSION/bin/php"
+        return 0
+    else
+        # 多个版本，让用户选择
+        log_info "检测到多个可用的 PHP 版本："
+        for i in "${!BT_PHP_VERSIONS[@]}"; do
+            local ver="${BT_PHP_VERSIONS[i]}"
+            echo "  $((i+1)). PHP 8.$((ver/10)) (/www/server/php/$ver/bin/php)"
+        done
+        echo
+        
+        while true; do
+            read -p "请选择要使用的 PHP 版本 (1-${#BT_PHP_VERSIONS[@]}): " -r choice
+            if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le ${#BT_PHP_VERSIONS[@]} ]; then
+                PHP_VERSION="${BT_PHP_VERSIONS[$((choice-1))]}"
+                PHP_CMD="/www/server/php/$PHP_VERSION/bin/php"
+                return 0
+            else
+                log_error "无效选择，请输入 1-${#BT_PHP_VERSIONS[@]} 之间的数字"
+            fi
+        done
+    fi
+}
+
 # 宝塔面板环境处理
 handle_bt_panel() {
     log_warning "=== 宝塔面板环境检测到 ==="
     log_info "正在检查宝塔面板中的 PHP 8.3+ 安装情况..."
     
-    # 只检查 PHP 8.3+ 版本
-    BT_PHP_VERSIONS=()
-    PHP_CMD=""
-    
-    # 按优先级检查 8.5, 8.4, 8.3
-    for ver in 85 84 83; do
-        if [ -d "/www/server/php/$ver" ] && [ -x "/www/server/php/$ver/bin/php" ]; then
-            BT_PHP_VERSIONS+=("$ver")
-            # 使用找到的最高版本
-            if [ -z "$PHP_CMD" ]; then
-                PHP_CMD="/www/server/php/$ver/bin/php"
-                PHP_VERSION="$ver"
-            fi
+    # 选择PHP版本
+    if select_bt_php_version; then
+        if [ ${#BT_PHP_VERSIONS[@]} -eq 1 ]; then
+            log_success "检测到 PHP 8.$((PHP_VERSION/10))，设置为默认版本"
+        else
+            log_success "已选择 PHP 8.$((PHP_VERSION/10))"
         fi
-    done
-    
-    if [ -n "$PHP_CMD" ]; then
-        log_success "检测到 PHP 8.$((PHP_VERSION/10))，设置为默认版本..."
         log_info "PHP 路径: $PHP_CMD"
         
         # 1. 首先处理PHP函数问题
@@ -545,18 +575,13 @@ handle_bt_panel() {
     read -p "是否已完成上述配置？(y/n): " -n 1 -r
     echo
     if [[ $REPLY =~ ^[Yy]$ ]]; then
-        # 重新检测PHP版本和路径
-        PHP_CMD=""
-        for ver in 85 84 83; do
-            if [ -x "/www/server/php/$ver/bin/php" ]; then
-                PHP_CMD="/www/server/php/$ver/bin/php"
-                PHP_VERSION="$ver"
-                break
+        # 重新检测和选择PHP版本
+        if select_bt_php_version; then
+            if [ ${#BT_PHP_VERSIONS[@]} -eq 1 ]; then
+                log_success "重新检测到 PHP 8.$((PHP_VERSION/10))"
+            else
+                log_success "已选择 PHP 8.$((PHP_VERSION/10))"
             fi
-        done
-        
-        if [ -n "$PHP_CMD" ]; then
-            log_success "重新检测到 PHP 8.$((PHP_VERSION/10))"
             
             # 1. 先检查函数
             log_info "验证PHP函数..."
