@@ -442,10 +442,8 @@ main() {
     # 显示后续步骤
     echo
     log_info "后续步骤："
-    log_info "1. 配置数据库: vim $SITE_ROOT/backend/.env"
-    log_info "2. 运行迁移: cd $SITE_ROOT/backend && php artisan migrate"
-    log_info "3. 访问安装向导: http://your-domain/install.php"
-    log_info "4. 完成后删除: rm $SITE_ROOT/backend/public/install.php"
+    log_info "访问安装向导: http://your-domain/api/install.php"
+    log_info "（安装向导将自动处理数据库配置、迁移和初始化等所有步骤）"
     
     # 询问是否执行依赖安装
     echo
