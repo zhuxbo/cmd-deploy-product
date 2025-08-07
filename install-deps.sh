@@ -615,7 +615,6 @@ handle_bt_panel() {
             done
             log_warning "   - 推荐安装："
             log_warning "     * opcache - 性能优化"
-            log_warning "     * intl - 国际化支持"
             echo
         fi
         
