@@ -528,27 +528,83 @@ select_bt_php_version() {
     fi
 }
 
-
 # 安装宝塔环境下可自动处理的扩展
 install_bt_auto_extensions() {
     if ! check_bt_panel || [ -z "$PHP_VERSION" ]; then
         return 1
     fi
     
-    # 宝塔环境下通过命令行可以安装的扩展
-    local auto_extensions=("opcache" "curl" "openssl" "zip")
+    # 除了4个必须手工安装的扩展外，其他都尝试自动安装
+    local manual_extensions=("calendar" "fileinfo" "mbstring" "redis")
+    local auto_extensions=(
+        "bcmath" "ctype" "curl" "dom" "gd" "iconv" 
+        "intl" "json" "openssl" "pcntl" "pcre" 
+        "pdo" "pdo_mysql" "tokenizer" "xml" "zip"
+    )
+    
+    local missing_auto=()
     local installed_any=false
     
+    # 检查哪些可自动安装的扩展缺失
     for ext in "${auto_extensions[@]}"; do
         if ! $PHP_CMD -m 2>/dev/null | grep -qi "^$ext$"; then
-            # 尝试通过宝塔命令安装（如果可用）
-            if command -v bt >/dev/null 2>&1; then
-                if bt php install_ext "$PHP_VERSION" "$ext" >/dev/null 2>&1; then
-                    installed_any=true
-                fi
-            fi
+            missing_auto+=("$ext")
         fi
     done
+    
+    if [ ${#missing_auto[@]} -gt 0 ]; then
+        log_info "尝试自动安装PHP扩展: ${missing_auto[*]}"
+        
+        # 根据系统类型使用对应的包管理器
+        local php_version_short="${PHP_VERSION:0:1}.${PHP_VERSION:1:1}"
+        local install_success=()
+        local install_failed=()
+        
+        for ext in "${missing_auto[@]}"; do
+            local installed=false
+            
+            # Ubuntu/Debian系统
+            if command -v apt-get >/dev/null 2>&1; then
+                local pkg_name="php${php_version_short}-${ext}"
+                if sudo apt-get update >/dev/null 2>&1 && sudo apt-get install -y "$pkg_name" >/dev/null 2>&1; then
+                    installed=true
+                fi
+            # CentOS/RHEL系统  
+            elif command -v yum >/dev/null 2>&1 || command -v dnf >/dev/null 2>&1; then
+                local pkg_name="php-${ext}"
+                local installer="yum"
+                command -v dnf >/dev/null 2>&1 && installer="dnf"
+                
+                if sudo $installer install -y "$pkg_name" >/dev/null 2>&1; then
+                    installed=true
+                fi
+            fi
+            
+            if [ "$installed" = true ]; then
+                install_success+=("$ext")
+                installed_any=true
+            else
+                install_failed+=("$ext")
+            fi
+        done
+        
+        # 如果有扩展安装成功，重启PHP服务
+        if [ "$installed_any" = true ]; then
+            log_success "已安装扩展: ${install_success[*]}"
+            
+            # 重启宝塔PHP服务
+            local php_service="php${PHP_VERSION: -2}-fpm"
+            if systemctl list-units --type=service | grep -q "$php_service"; then
+                sudo systemctl restart "$php_service" >/dev/null 2>&1
+            elif [ -f "/etc/init.d/php-fpm-${PHP_VERSION}" ]; then
+                sudo /etc/init.d/php-fpm-${PHP_VERSION} restart >/dev/null 2>&1
+            fi
+        fi
+        
+        if [ ${#install_failed[@]} -gt 0 ]; then
+            log_warning "以下扩展需要在宝塔面板中手动安装: ${install_failed[*]}"
+        fi
+    fi
     
     return 0
 }
@@ -609,7 +665,6 @@ handle_bt_panel() {
         log_warning "   - 登录宝塔面板"
         log_warning "   - 进入【软件商店】->【运行环境】"
         log_warning "   - 安装 PHP 8.3 或更高版本"
-        echo
         log_warning "2. 【配置函数和扩展】"
         log_warning "   - 安装完PHP后，按上述步骤配置函数和扩展"
         log_warning "====================================="
