@@ -35,7 +35,11 @@
 **功能特点：**
 - 自动检测系统类型（Ubuntu/Debian/CentOS/RHEL）
 - 安装 PHP 8.3+ 及所有必需扩展
-- 智能识别宝塔面板环境
+- **宝塔环境智能处理**：
+  - 自动启用被禁用的PHP函数（exec, putenv, pcntl_signal, pcntl_alarm）
+  - 自动安装16个常用PHP扩展
+  - 自动检查和升级Composer版本
+  - 安装后自动校验和重启服务
 - 配置 PHP 优化参数
 - 安装 Redis 等附加依赖
 
@@ -49,7 +53,9 @@
 - Debian 9+
 - CentOS 7+
 - RHEL 7+
-- 宝塔面板环境（需手动在面板中安装）
+- **宝塔面板环境**（大部分操作已自动化）
+  - 自动安装: bcmath, ctype, curl, dom, gd, iconv, intl, json, openssl, pcntl, pcre, pdo, pdo_mysql, tokenizer, xml, zip
+  - 仍需手动安装: calendar, fileinfo, mbstring, redis
 
 ### 3. update.sh - 系统更新脚本
 

@@ -556,24 +556,43 @@ install_bt_auto_extensions() {
         log_info "尝试自动安装PHP扩展: ${missing_auto[*]}"
         
         # 根据系统类型使用对应的包管理器
-        local php_version_short="${PHP_VERSION:0:1}.${PHP_VERSION:1:1}"
+        local php_version_short=""
+        if [[ "$PHP_VERSION" =~ ^[0-9]{2}$ ]]; then
+            # 宝塔格式：83 -> 8.3
+            php_version_short="${PHP_VERSION:0:1}.${PHP_VERSION:1:1}"
+        else
+            # 标准格式：8.3 -> 8.3
+            php_version_short="$PHP_VERSION"
+        fi
+        
         local install_success=()
         local install_failed=()
         
         for ext in "${missing_auto[@]}"; do
             local installed=false
+            local pkg_name=""
             
             # Ubuntu/Debian系统
             if command -v apt-get >/dev/null 2>&1; then
-                local pkg_name="php${php_version_short}-${ext}"
+                # 扩展名映射
+                case "$ext" in
+                    "pdo_mysql") pkg_name="php${php_version_short}-mysql" ;;
+                    *) pkg_name="php${php_version_short}-${ext}" ;;
+                esac
+                
                 if sudo apt-get update >/dev/null 2>&1 && sudo apt-get install -y "$pkg_name" >/dev/null 2>&1; then
                     installed=true
                 fi
             # CentOS/RHEL系统  
             elif command -v yum >/dev/null 2>&1 || command -v dnf >/dev/null 2>&1; then
-                local pkg_name="php-${ext}"
                 local installer="yum"
                 command -v dnf >/dev/null 2>&1 && installer="dnf"
+                
+                # 扩展名映射
+                case "$ext" in
+                    "pdo_mysql") pkg_name="php-mysqlnd" ;;
+                    *) pkg_name="php-${ext}" ;;
+                esac
                 
                 if sudo $installer install -y "$pkg_name" >/dev/null 2>&1; then
                     installed=true
@@ -592,10 +611,22 @@ install_bt_auto_extensions() {
         if [ "$installed_any" = true ]; then
             log_success "已安装扩展: ${install_success[*]}"
             
-            # 重启宝塔PHP服务
-            local php_service="php${PHP_VERSION: -2}-fpm"
-            if systemctl list-units --type=service | grep -q "$php_service"; then
-                sudo systemctl restart "$php_service" >/dev/null 2>&1
+            # 重启PHP服务
+            local php_service_name=""
+            if [[ "$PHP_VERSION" =~ ^[0-9]{2}$ ]]; then
+                # 宝塔格式：83 -> php83-fpm
+                php_service_name="php${PHP_VERSION: -2}-fpm"
+            else
+                # 标准格式：8.3 -> php8.3-fpm
+                php_service_name="php${PHP_VERSION}-fpm"
+            fi
+            
+            # 尝试多种服务重启方法
+            if systemctl list-units --type=service | grep -q "$php_service_name"; then
+                sudo systemctl restart "$php_service_name" >/dev/null 2>&1
+            elif systemctl list-units --type=service | grep -q "php.*fpm"; then
+                # 通用PHP-FPM服务重启
+                sudo systemctl restart php*fpm >/dev/null 2>&1
             elif [ -f "/etc/init.d/php-fpm-${PHP_VERSION}" ]; then
                 sudo /etc/init.d/php-fpm-${PHP_VERSION} restart >/dev/null 2>&1
             fi
@@ -630,18 +661,45 @@ handle_bt_panel() {
         # 2. 尝试安装可自动处理的扩展
         install_bt_auto_extensions
         
-        # 3. 检查需要手动安装的扩展
+        # 3. 安装后重新检测所有扩展状态
+        echo
+        log_info "校验扩展安装结果..."
+        local all_extensions=(
+            "bcmath" "calendar" "ctype" "curl" "dom" "fileinfo" 
+            "gd" "iconv" "intl" "json" "mbstring" "openssl" 
+            "pcntl" "pcre" "pdo" "pdo_mysql" "redis" 
+            "tokenizer" "xml" "zip"
+        )
+        
+        local missing_auto_extensions=()
         local missing_manual_extensions=()
         local manual_extensions=("calendar" "fileinfo" "mbstring" "redis")
         
-        for ext in "${manual_extensions[@]}"; do
+        for ext in "${all_extensions[@]}"; do
             if ! $PHP_CMD -m 2>/dev/null | grep -qi "^$ext$"; then
-                missing_manual_extensions+=("$ext")
+                # 判断是手动安装还是自动安装的扩展
+                local is_manual=false
+                for manual_ext in "${manual_extensions[@]}"; do
+                    if [ "$ext" = "$manual_ext" ]; then
+                        is_manual=true
+                        missing_manual_extensions+=("$ext")
+                        break
+                    fi
+                done
+                
+                if [ "$is_manual" = false ]; then
+                    missing_auto_extensions+=("$ext")
+                fi
             fi
         done
         
         # 4. 输出结果
-        if [ "$functions_ok" = true ] && [ ${#missing_manual_extensions[@]} -eq 0 ]; then
+        local extensions_ok=true
+        if [ ${#missing_auto_extensions[@]} -gt 0 ] || [ ${#missing_manual_extensions[@]} -gt 0 ]; then
+            extensions_ok=false
+        fi
+        
+        if [ "$functions_ok" = true ] && [ "$extensions_ok" = true ]; then
             log_success "PHP环境检查通过"
             return 0
         fi
@@ -652,8 +710,13 @@ handle_bt_panel() {
             log_warning "请在宝塔面板 -> PHP设置 -> 禁用函数中移除: exec, putenv, pcntl_signal, pcntl_alarm"
         fi
         
+        if [ ${#missing_auto_extensions[@]} -gt 0 ]; then
+            log_warning "自动安装失败的扩展: ${missing_auto_extensions[*]}"
+            log_info "这些扩展也需要在宝塔面板中手动安装"
+        fi
+        
         if [ ${#missing_manual_extensions[@]} -gt 0 ]; then
-            log_warning "请在宝塔面板安装扩展: ${missing_manual_extensions[*]}"
+            log_warning "请在宝塔面板手动安装扩展: ${missing_manual_extensions[*]}"
         fi
         
     else

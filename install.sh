@@ -244,6 +244,7 @@ setup_cron() {
         
         if ! crontab -l 2>/dev/null | grep -q "Laravel-$SITE_NAME"; then
             (crontab -l 2>/dev/null; echo "$CRON_CMD") | crontab -
+            echo
             log_success "定时任务已配置"
         fi
     fi
@@ -277,7 +278,8 @@ EOF
             sudo supervisorctl reread >/dev/null 2>&1
             sudo supervisorctl update >/dev/null 2>&1
             sudo supervisorctl start laravel-worker-$SITE_NAME:* >/dev/null 2>&1
-            
+
+            echo
             log_success "队列守护进程已配置"
         fi
     fi
@@ -285,12 +287,10 @@ EOF
 
 # 主函数
 main() {
-    echo
     log_info "证书管理系统生产环境安装"
     log_info "站点目录: $SITE_ROOT"
     
     # 创建目录
-    echo
     create_directories
     
     # 拉取生产代码
@@ -316,15 +316,14 @@ main() {
     set_permissions
     
     # 配置定时任务
-    echo
     setup_cron
     
     # 配置队列守护进程
-    echo
     setup_queue
-    
+
+    echo
     log_success "安装完成！版本: $VERSION"
-    
+
     # 显示后续步骤
     echo
     log_warning "后续步骤："
@@ -338,7 +337,6 @@ main() {
     
     # 询问是否执行依赖安装
     echo
-    log_info "运行环境检查："
     read -p "是否需要检查并安装运行环境依赖？(y/n): " -n 1 -r
     echo
     if [[ $REPLY =~ ^[Yy]$ ]]; then
@@ -364,13 +362,11 @@ main() {
     if check_bt_panel; then
         echo
         log_warning "=== 请在宝塔面板中手动完成以下配置 ==="
-        echo
         log_warning "1. 定时任务："
         log_warning "   任务类型 Shell脚本"
         log_warning "   执行周期 1分钟"
         log_warning "   执行用户 www"
         log_warning "   脚本内容 cd $SITE_ROOT/backend && php artisan schedule:run"
-        echo
         log_warning "2. 队列守护进程："
         log_warning "   启动用户 www"
         log_warning "   启动命令 php artisan queue:work --queue Task"
