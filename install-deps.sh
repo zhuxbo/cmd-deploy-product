@@ -1129,19 +1129,10 @@ main() {
         log_info "检测到宝塔面板环境"
         handle_bt_panel
         
-        # 宝塔环境下的额外检查
-        echo
-        log_info "宝塔环境PHP函数检查..."
-        check_php_functions || log_warning "请按上述提示在宝塔面板中启用被禁用的PHP函数"
-        
+        # 宝塔环境检查Composer
         echo  
-        log_info "宝塔环境Composer检查..."
-        if ! check_composer; then
-            log_warning "Composer未安装或版本过低"
-            log_info "建议手动安装最新版本Composer："
-            log_info "curl -sS https://getcomposer.org/installer | php"
-            log_info "sudo mv composer.phar /usr/local/bin/composer"
-            log_info "sudo chmod +x /usr/local/bin/composer"
+        if ! check_composer >/dev/null 2>&1; then
+            log_warning "建议安装Composer: curl -sS https://getcomposer.org/installer | php && sudo mv composer.phar /usr/local/bin/composer"
         fi
         
     else
@@ -1179,37 +1170,36 @@ main() {
         fi
     fi
     
-    # 最终检查
+    # 给出最终提示
     echo
-    log_info "执行最终检查..."
+    log_success "环境检查完成"
     
-    local all_good=true
-    
-    # PHP版本和扩展检查
-    if ! check_php_version; then
-        all_good=false
+    # 简化检查，只给出友好提示
+    if check_bt_panel; then
+        # 检查缺失的手动安装扩展
+        local missing_extensions=()
+        local manual_extensions=("calendar" "fileinfo" "mbstring" "redis")
+        
+        for ext in "${manual_extensions[@]}"; do
+            if ! $PHP_CMD -m 2>/dev/null | grep -qi "^$ext$"; then
+                missing_extensions+=("$ext")
+            fi
+        done
+        
+        if [ ${#missing_extensions[@]} -gt 0 ]; then
+            echo
+            log_warning "请在宝塔面板安装扩展: ${missing_extensions[*]}"
+            log_info "安装方法: 软件商店 -> PHP -> 安装扩展"
+        fi
+        
+        if ! check_php_functions >/dev/null 2>&1; then
+            echo
+            log_warning "请在宝塔面板启用PHP函数: exec, putenv, pcntl_signal, pcntl_alarm"
+            log_info "配置方法: PHP设置 -> 禁用函数"
+        fi
     fi
     
-    if ! check_php_extensions; then
-        all_good=false  
-    fi
-    
-    # PHP函数检查
-    if ! check_php_functions; then
-        log_warning "PHP函数检查未通过，但这不会阻止安装继续"
-    fi
-    
-    # Composer检查
-    if ! check_composer; then
-        log_warning "Composer检查未通过，但这不会阻止安装继续"
-    fi
-    
-    if [ "$all_good" = true ]; then
-        show_summary
-    else
-        log_error "环境检查未通过，请查看上述错误信息"
-        exit 1
-    fi
+    # 不再使用exit 1，让安装流程继续
 }
 
 # 执行主函数

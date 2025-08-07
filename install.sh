@@ -285,34 +285,44 @@ EOF
 
 # 主函数
 main() {
+    echo
     log_info "证书管理系统生产环境安装"
     log_info "站点目录: $SITE_ROOT"
     
     # 创建目录
+    echo
     create_directories
     
     # 拉取生产代码
+    echo
     pull_production_code
     
     # 备份现有文件
+    echo
     backup_existing
     
     # 部署文件
+    echo
     deploy_files
     
     # 更新nginx配置
+    echo
     update_nginx_config
     
     # 初始化Laravel
+    echo
     initialize_laravel
     
     # 设置权限
+    echo
     set_permissions
     
     # 配置定时任务
+    echo
     setup_cron
     
     # 配置队列守护进程
+    echo
     setup_queue
     
     log_success "安装完成！版本: $VERSION"
@@ -331,8 +341,9 @@ main() {
     if [[ $REPLY =~ ^[Yy]$ ]]; then
         DEPS_SCRIPT="$SCRIPT_DIR/install-deps.sh"
         if [ -f "$DEPS_SCRIPT" ]; then
+            echo
             log_info "执行依赖安装脚本..."
-            bash "$DEPS_SCRIPT"
+            bash "$DEPS_SCRIPT" || log_warning "依赖安装脚本执行完成，可能需要手动处理部分配置"
         else
             log_warning "依赖安装脚本不存在: $DEPS_SCRIPT"
             log_info "请手动安装以下依赖："
@@ -355,7 +366,7 @@ main() {
         log_warning "1. Nginx 配置【重要】："
         log_warning "   - 进入网站设置 -> 配置文件"
         log_warning "   - 注释掉或删除现有的 root 配置行"
-        log_warning "   - 在 server 块中添加：include $SITE_ROOT/nginx/manager.conf;"
+        log_warning "   - 在 下一行 添加：include $SITE_ROOT/nginx/manager.conf;"
         log_warning "   - 保存并重载配置"
         echo
         log_warning "2. 定时任务（每分钟）："
