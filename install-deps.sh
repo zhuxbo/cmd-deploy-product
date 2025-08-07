@@ -1147,10 +1147,20 @@ main() {
         log_info "检测到宝塔面板环境"
         handle_bt_panel
         
-        # 宝塔环境检查Composer
-        echo  
-        if ! check_composer >/dev/null 2>&1; then
-            log_warning "建议安装Composer: curl -sS https://getcomposer.org/installer | php && sudo mv composer.phar /usr/local/bin/composer"
+        # 宝塔环境自动处理Composer
+        echo
+        log_info "检查 Composer..."
+        if ! check_composer; then
+            log_info "自动安装 Composer..."
+            install_or_update_composer
+        else
+            # 检查版本是否需要更新
+            local current_version=$(timeout -k 3s 10s composer --version 2>&1 | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' | head -1)
+            if [ -n "$current_version" ] && ! version_compare "$current_version" "2.8.0"; then
+                log_warning "Composer 版本 $current_version 低于推荐版本 2.8.0"
+                log_info "自动更新 Composer..."
+                install_or_update_composer
+            fi
         fi
         
     else
