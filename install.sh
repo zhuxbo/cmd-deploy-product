@@ -18,17 +18,32 @@ log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 log_warning() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 
-# 脚本根目录
-SCRIPT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DEPLOY_ROOT="$SCRIPT_ROOT"
-SOURCE_DIR="$DEPLOY_ROOT/source"
-BACKUP_DIR="$DEPLOY_ROOT/backup"
+# 获取脚本所在目录（deploy目录）
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# 获取站点根目录（site目录）
+SITE_ROOT="$(dirname "$SCRIPT_DIR")"
+# 源码目录
+SOURCE_DIR="$SCRIPT_DIR/source"
+# 备份目录
+BACKUP_DIR="$SITE_ROOT/backup/update"
+
+# 生产代码仓库
 PRODUCTION_REPO="git@gitee.com:zhuxbo/production-code.git"
+
+# 检测宝塔面板
+check_bt_panel() {
+    if [ -f "/www/server/panel/BT-Panel" ] || \
+       [ -f "/www/server/panel/class/panelPlugin.py" ] || \
+       [ -d "/www/server/panel" ] && [ -f "/www/server/panel/data/port.pl" ]; then
+        return 0  # 是宝塔环境
+    fi
+    return 1  # 非宝塔环境
+}
 
 # 创建必要的目录
 create_directories() {
     log_info "创建必要的目录..."
-    mkdir -p "$SOURCE_DIR" "$BACKUP_DIR"
+    mkdir -p "$SOURCE_DIR" "$BACKUP_DIR" "$SITE_ROOT/backup/keeper"
     log_success "目录创建完成"
 }
 
@@ -39,9 +54,10 @@ pull_production_code() {
     cd "$SOURCE_DIR"
     
     if [ -d "production-code" ]; then
-        log_info "更新现有生产代码..."
+        log_info "强制更新生产代码..."
         cd production-code
-        git pull origin main
+        git fetch origin
+        git reset --hard origin/main
     else
         log_info "克隆生产代码仓库..."
         git clone "$PRODUCTION_REPO" production-code
@@ -54,7 +70,7 @@ pull_production_code() {
         log_success "生产代码版本: $VERSION"
     fi
     
-    cd "$SCRIPT_ROOT"
+    cd "$SCRIPT_DIR"
 }
 
 # 备份现有文件
@@ -62,12 +78,12 @@ backup_existing() {
     log_info "检查并备份现有文件..."
     
     BACKUP_TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-    BACKUP_PATH="$BACKUP_DIR/backup_$BACKUP_TIMESTAMP"
+    BACKUP_PATH="$BACKUP_DIR/install_$BACKUP_TIMESTAMP"
     
     # 检查是否需要备份
     NEED_BACKUP=false
     for dir in backend frontend nginx; do
-        if [ -d "$DEPLOY_ROOT/$dir" ]; then
+        if [ -d "$SITE_ROOT/$dir" ]; then
             NEED_BACKUP=true
             break
         fi
@@ -79,26 +95,30 @@ backup_existing() {
         
         # 备份现有目录
         for dir in backend frontend nginx; do
-            if [ -d "$DEPLOY_ROOT/$dir" ]; then
+            if [ -d "$SITE_ROOT/$dir" ]; then
                 log_info "备份 $dir 目录..."
-                mv "$DEPLOY_ROOT/$dir" "$BACKUP_PATH/"
+                cp -r "$SITE_ROOT/$dir" "$BACKUP_PATH/"
             fi
         done
         
         # 创建备份信息文件
         cat > "$BACKUP_PATH/backup_info.txt" <<EOF
 备份时间: $(date)
-备份原因: 安装新版本
+备份原因: 全新安装
 版本信息: $VERSION
 
 恢复方法:
 1. 停止Web服务: sudo systemctl stop nginx
-2. 删除当前部署: rm -rf $DEPLOY_ROOT/{backend,frontend,nginx}
-3. 恢复备份文件: cp -r $BACKUP_PATH/* $DEPLOY_ROOT/
+2. 删除当前部署: rm -rf $SITE_ROOT/{backend,frontend,nginx}
+3. 恢复备份文件: cp -r $BACKUP_PATH/* $SITE_ROOT/
 4. 启动Web服务: sudo systemctl start nginx
 EOF
         
         log_success "备份完成: $BACKUP_PATH"
+        
+        # 删除旧文件
+        log_info "删除旧文件..."
+        rm -rf "$SITE_ROOT/backend" "$SITE_ROOT/frontend" "$SITE_ROOT/nginx"
     else
         log_info "没有发现现有部署，跳过备份"
     fi
@@ -111,21 +131,21 @@ deploy_files() {
     # 从源码目录复制文件
     SOURCE_PATH="$SOURCE_DIR/production-code"
     
-    # 复制主要目录
+    # 复制主要目录到站点根目录
     for dir in backend frontend nginx; do
         if [ -d "$SOURCE_PATH/$dir" ]; then
             log_info "部署 $dir..."
-            cp -r "$SOURCE_PATH/$dir" "$DEPLOY_ROOT/"
+            cp -r "$SOURCE_PATH/$dir" "$SITE_ROOT/"
         fi
     done
     
     # 复制版本文件
     if [ -f "$SOURCE_PATH/VERSION" ]; then
-        cp "$SOURCE_PATH/VERSION" "$DEPLOY_ROOT/"
+        cp "$SOURCE_PATH/VERSION" "$SITE_ROOT/"
     fi
     
     if [ -f "$SOURCE_PATH/BUILD_INFO.json" ]; then
-        cp "$SOURCE_PATH/BUILD_INFO.json" "$DEPLOY_ROOT/"
+        cp "$SOURCE_PATH/BUILD_INFO.json" "$SITE_ROOT/"
     fi
     
     log_success "文件部署完成"
@@ -135,16 +155,43 @@ deploy_files() {
 update_nginx_config() {
     log_info "更新 Nginx 配置..."
     
-    NGINX_CONF="$DEPLOY_ROOT/nginx/manager.conf"
+    NGINX_CONF="$SITE_ROOT/nginx/manager.conf"
     
     if [ -f "$NGINX_CONF" ]; then
         # 替换项目根目录路径
-        sed -i "s|__PROJECT_ROOT__|$DEPLOY_ROOT|g" "$NGINX_CONF"
+        sed -i "s|__PROJECT_ROOT__|$SITE_ROOT|g" "$NGINX_CONF"
         log_success "Nginx 配置更新完成"
         
-        log_info "请将 Nginx 配置链接到系统配置目录："
-        log_info "sudo ln -sf $NGINX_CONF /etc/nginx/sites-enabled/cert-manager.conf"
-        log_info "sudo nginx -t && sudo systemctl reload nginx"
+        if check_bt_panel; then
+            log_warning "=== 宝塔面板 Nginx 配置 ==="
+            log_warning "请在宝塔面板中："
+            log_warning "1. 进入网站设置"
+            log_warning "2. 选择【配置文件】"
+            log_warning "3. 将以下内容添加到配置中："
+            log_warning "   include $NGINX_CONF;"
+            log_warning "4. 保存并重载配置"
+        else
+            log_info "自动配置 Nginx..."
+            # 检查 sites-enabled 目录
+            if [ -d "/etc/nginx/sites-enabled" ]; then
+                sudo ln -sf "$NGINX_CONF" /etc/nginx/sites-enabled/cert-manager.conf
+                log_success "Nginx 配置已链接"
+            elif [ -d "/etc/nginx/conf.d" ]; then
+                sudo ln -sf "$NGINX_CONF" /etc/nginx/conf.d/cert-manager.conf
+                log_success "Nginx 配置已链接"
+            else
+                log_warning "请手动将以下配置添加到 Nginx："
+                log_warning "include $NGINX_CONF;"
+            fi
+            
+            # 测试并重载配置
+            if sudo nginx -t; then
+                sudo systemctl reload nginx
+                log_success "Nginx 配置已重载"
+            else
+                log_error "Nginx 配置测试失败，请检查配置"
+            fi
+        fi
     else
         log_warning "未找到 Nginx 配置文件"
     fi
@@ -154,7 +201,7 @@ update_nginx_config() {
 initialize_laravel() {
     log_info "初始化 Laravel 应用..."
     
-    cd "$DEPLOY_ROOT/backend"
+    cd "$SITE_ROOT/backend"
     
     # 创建 .env 文件
     if [ ! -f ".env" ] && [ -f ".env.example" ]; then
@@ -169,84 +216,239 @@ initialize_laravel() {
     
     # 优化自动加载
     log_info "优化 Composer 自动加载..."
-    composer dump-autoload --optimize --no-dev
+    if command -v composer &> /dev/null; then
+        composer dump-autoload --optimize --no-dev
+    else
+        log_warning "Composer 未安装，跳过优化"
+    fi
+    
+    # 检查PHP命令
+    PHP_CMD="php"
+    if check_bt_panel && [ -x "/www/server/php/83/bin/php" ]; then
+        PHP_CMD="/www/server/php/83/bin/php"
+    fi
     
     # 创建存储链接
     if [ -L "public/storage" ]; then
         rm public/storage
     fi
-    php artisan storage:link
+    $PHP_CMD artisan storage:link
     
     # 运行包发现
-    php artisan package:discover --ansi
+    $PHP_CMD artisan package:discover --ansi
+    
+    # 生成应用密钥（如果没有）
+    if ! grep -q "^APP_KEY=base64:" .env; then
+        log_info "生成应用密钥..."
+        $PHP_CMD artisan key:generate
+    fi
     
     log_success "Laravel 初始化完成"
     
-    # 提示用户后续步骤
-    log_warning "=== 重要提示 ==="
-    log_warning "1. 请编辑 $DEPLOY_ROOT/backend/.env 配置数据库连接"
-    log_warning "2. 访问 /install.php 完成系统安装"
-    log_warning "3. 安装完成后删除 public/install.php 文件"
-    
-    cd "$SCRIPT_ROOT"
+    cd "$SCRIPT_DIR"
 }
 
 # 设置文件权限
 set_permissions() {
     log_info "设置文件权限..."
     
-    # 检测 Web 用户
-    if id "www-data" &>/dev/null; then
-        WEB_USER="www-data"
-        WEB_GROUP="www-data"
-    elif id "nginx" &>/dev/null; then
-        WEB_USER="nginx"
-        WEB_GROUP="nginx"
-    else
-        log_warning "未检测到 Web 用户，使用当前用户"
-        WEB_USER=$(whoami)
-        WEB_GROUP=$(whoami)
-    fi
+    # 获取站点目录的所有者信息
+    SITE_OWNER=$(stat -c "%U" "$SITE_ROOT")
+    SITE_GROUP=$(stat -c "%G" "$SITE_ROOT")
+    
+    log_info "站点目录所有者: $SITE_OWNER:$SITE_GROUP"
+    log_info "站点目录即为Web用户目录，storage和cache保持一致权限"
     
     # 设置后端权限
-    if [ -d "$DEPLOY_ROOT/backend" ]; then
+    if [ -d "$SITE_ROOT/backend" ]; then
         log_info "设置后端目录权限..."
         
-        # Laravel 需要写入的目录
-        sudo chown -R "$WEB_USER:$WEB_GROUP" "$DEPLOY_ROOT/backend/storage"
-        sudo chown -R "$WEB_USER:$WEB_GROUP" "$DEPLOY_ROOT/backend/bootstrap/cache"
+        # 整体保持与站点目录一致的所有者
+        sudo chown -R "$SITE_OWNER:$SITE_GROUP" "$SITE_ROOT/backend"
         
-        # 设置目录权限
-        sudo chmod -R 775 "$DEPLOY_ROOT/backend/storage"
-        sudo chmod -R 775 "$DEPLOY_ROOT/backend/bootstrap/cache"
+        # 设置基础目录权限为755
+        sudo chmod 755 "$SITE_ROOT/backend"
         
-        # 其他文件设置为只读
-        sudo chmod -R 755 "$DEPLOY_ROOT/backend"
+        # 代码文件设置为644（只读）
+        find "$SITE_ROOT/backend" -type f -name "*.php" -exec sudo chmod 644 {} \;
+        find "$SITE_ROOT/backend" -type f -name "*.js" -exec sudo chmod 644 {} \;
+        find "$SITE_ROOT/backend" -type f -name "*.css" -exec sudo chmod 644 {} \;
+        find "$SITE_ROOT/backend" -type f -name "*.xml" -exec sudo chmod 644 {} \;
+        find "$SITE_ROOT/backend" -type f -name "*.yml" -exec sudo chmod 644 {} \;
+        find "$SITE_ROOT/backend" -type f -name "*.yaml" -exec sudo chmod 644 {} \;
+        find "$SITE_ROOT/backend" -type f -name "*.md" -exec sudo chmod 644 {} \;
+        find "$SITE_ROOT/backend" -type f -name "*.txt" -exec sudo chmod 644 {} \;
         
-        # 确保日志目录可写
-        sudo chmod -R 775 "$DEPLOY_ROOT/backend/storage/logs"
+        # 配置文件保持644权限
+        find "$SITE_ROOT/backend" -name ".env*" -exec sudo chmod 644 {} \;
+        
+        # JSON文件特殊处理 - 某些可能需要写入权限
+        find "$SITE_ROOT/backend" -type f -name "*.json" -not -path "$SITE_ROOT/backend/storage/*" -not -path "$SITE_ROOT/backend/bootstrap/cache/*" -exec sudo chmod 644 {} \;
+        
+        # Laravel 特殊文件处理
+        if [ -f "$SITE_ROOT/backend/artisan" ]; then
+            sudo chmod 755 "$SITE_ROOT/backend/artisan"  # artisan需要执行权限
+        fi
+        
+        # Laravel 需要写入权限的目录 - 保持与站点目录一致的用户
+        if [ -d "$SITE_ROOT/backend/storage" ]; then
+            sudo chown -R "$SITE_OWNER:$SITE_GROUP" "$SITE_ROOT/backend/storage"
+            sudo chmod -R 775 "$SITE_ROOT/backend/storage"
+            # storage内的文件设置为664
+            find "$SITE_ROOT/backend/storage" -type f -exec sudo chmod 664 {} \;
+        fi
+        
+        if [ -d "$SITE_ROOT/backend/bootstrap/cache" ]; then
+            sudo chown -R "$SITE_OWNER:$SITE_GROUP" "$SITE_ROOT/backend/bootstrap/cache"
+            sudo chmod -R 775 "$SITE_ROOT/backend/bootstrap/cache"
+        fi
+        
+        # 其他目录设置为755
+        find "$SITE_ROOT/backend" -type d -not -path "$SITE_ROOT/backend/storage*" -not -path "$SITE_ROOT/backend/bootstrap/cache*" -exec sudo chmod 755 {} \;
     fi
     
-    # 设置前端权限（只读）
-    if [ -d "$DEPLOY_ROOT/frontend" ]; then
+    # 设置前端权限
+    if [ -d "$SITE_ROOT/frontend" ]; then
         log_info "设置前端目录权限..."
-        sudo chmod -R 755 "$DEPLOY_ROOT/frontend"
+        
+        # 前端保持与站点目录一致的所有者
+        sudo chown -R "$SITE_OWNER:$SITE_GROUP" "$SITE_ROOT/frontend"
+        
+        # 目录权限755
+        find "$SITE_ROOT/frontend" -type d -exec sudo chmod 755 {} \;
+        
+        # 代码文件设置为644（只读）
+        find "$SITE_ROOT/frontend" -type f \( -name "*.html" -o -name "*.js" -o -name "*.css" -o -name "*.json" -o -name "*.svg" -o -name "*.png" -o -name "*.jpg" -o -name "*.jpeg" -o -name "*.gif" -o -name "*.ico" -o -name "*.xml" -o -name "*.txt" -o -name "*.md" \) -exec sudo chmod 644 {} \;
+    fi
+    
+    # 设置nginx目录权限
+    if [ -d "$SITE_ROOT/nginx" ]; then
+        log_info "设置nginx目录权限..."
+        sudo chown -R "$SITE_OWNER:$SITE_GROUP" "$SITE_ROOT/nginx"
+        sudo chmod -R 755 "$SITE_ROOT/nginx"
+        find "$SITE_ROOT/nginx" -type f -exec sudo chmod 644 {} \;
     fi
     
     log_success "权限设置完成"
+    log_info "- 代码文件: 644 (只读)"
+    log_info "- 目录: 755"  
+    log_info "- Laravel写入目录: $SITE_OWNER:$SITE_GROUP 775"
+    log_info "- 所有文件: $SITE_OWNER:$SITE_GROUP"
+}
+
+# 配置定时任务
+setup_cron() {
+    # 获取站点目录名用作标识
+    SITE_NAME=$(basename "$SITE_ROOT")
+    
+    if check_bt_panel; then
+        log_warning "=== 宝塔面板定时任务配置 ==="
+        log_warning "请在宝塔面板中添加以下定时任务："
+        log_warning ""
+        log_warning "1. Laravel 调度器："
+        log_warning "   名称: Laravel-$SITE_NAME"
+        log_warning "   类型: Shell脚本"
+        log_warning "   周期: 每分钟"
+        log_warning "   脚本内容: cd $SITE_ROOT/backend && php artisan schedule:run >> /dev/null 2>&1"
+        log_warning ""
+        log_warning "2. 备份任务（可选）："
+        log_warning "   名称: Backup-$SITE_NAME"
+        log_warning "   类型: Shell脚本"
+        log_warning "   周期: 每天凌晨2点"
+        log_warning "   脚本内容: $SCRIPT_DIR/keeper.sh >> $SITE_ROOT/backup/keeper/keeper.log 2>&1"
+        log_warning "========================="
+    else
+        log_info "配置系统定时任务（站点：$SITE_NAME）..."
+        
+        # Laravel 调度器 - 添加站点标识注释
+        CRON_CMD="# Laravel-$SITE_NAME
+* * * * * cd $SITE_ROOT/backend && php artisan schedule:run >> /dev/null 2>&1"
+        
+        # 检查是否已存在该站点的调度器
+        if ! crontab -l 2>/dev/null | grep -q "Laravel-$SITE_NAME"; then
+            (crontab -l 2>/dev/null; echo "$CRON_CMD") | crontab -
+            log_success "Laravel 调度器定时任务已添加（$SITE_NAME）"
+        else
+            log_info "Laravel 调度器定时任务已存在（$SITE_NAME）"
+        fi
+        
+        # 备份任务（可选）
+        read -p "是否添加每日自动备份任务？(y/n): " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            BACKUP_CRON="# Backup-$SITE_NAME
+0 2 * * * $SCRIPT_DIR/keeper.sh >> $SITE_ROOT/backup/keeper/keeper.log 2>&1"
+            if ! crontab -l 2>/dev/null | grep -q "Backup-$SITE_NAME"; then
+                (crontab -l 2>/dev/null; echo "$BACKUP_CRON") | crontab -
+                log_success "备份定时任务已添加（$SITE_NAME，每天凌晨2点）"
+            else
+                log_info "备份定时任务已存在（$SITE_NAME）"
+            fi
+        fi
+    fi
+}
+
+# 配置队列守护进程
+setup_queue() {
+    # 获取站点目录名用作标识
+    SITE_NAME=$(basename "$SITE_ROOT")
+    
+    if check_bt_panel; then
+        log_warning "=== 宝塔面板队列守护进程配置 ==="
+        log_warning "请在宝塔面板中添加守护进程："
+        log_warning ""
+        log_warning "1. 进入【软件商店】->【Supervisor管理器】"
+        log_warning "2. 添加守护进程："
+        log_warning "   名称: laravel-worker-$SITE_NAME"
+        log_warning "   启动用户: www"
+        log_warning "   运行目录: $SITE_ROOT/backend"
+        log_warning "   启动命令: php artisan queue:work --sleep=3 --tries=3 --max-time=3600"
+        log_warning "   进程数量: 2"
+        log_warning "========================="
+    else
+        log_info "配置队列守护进程（站点：$SITE_NAME）..."
+        
+        if command -v supervisorctl &> /dev/null; then
+            # 创建 supervisor 配置，使用站点名避免冲突
+            SUPERVISOR_CONF="/etc/supervisor/conf.d/laravel-worker-$SITE_NAME.conf"
+            
+            sudo tee "$SUPERVISOR_CONF" > /dev/null <<EOF
+[program:laravel-worker-$SITE_NAME]
+process_name=%(program_name)s_%(process_num)02d
+command=php artisan queue:work --sleep=3 --tries=3 --max-time=3600
+directory=$SITE_ROOT/backend
+autostart=true
+autorestart=true
+stopasgroup=true
+killasgroup=true
+user=$SITE_OWNER
+numprocs=2
+redirect_stderr=true
+stdout_logfile=$SITE_ROOT/backend/storage/logs/worker.log
+stopwaitsecs=3600
+EOF
+            
+            # 重新加载 supervisor
+            sudo supervisorctl reread
+            sudo supervisorctl update
+            sudo supervisorctl start laravel-worker-$SITE_NAME:*
+            
+            log_success "队列守护进程已配置（laravel-worker-$SITE_NAME）"
+        else
+            log_warning "Supervisor 未安装，请手动配置队列守护进程"
+            log_info "安装命令: sudo apt-get install supervisor"
+            log_info "配置名称: laravel-worker-$SITE_NAME"
+        fi
+    fi
 }
 
 # 主函数
 main() {
     log_info "============================================"
     log_info "证书管理系统生产环境安装"
+    log_info "站点目录: $SITE_ROOT"
+    log_info "脚本目录: $SCRIPT_DIR"
     log_info "============================================"
-    
-    # 检查是否有必要的权限
-    if [ "$EUID" -eq 0 ]; then
-        log_error "请不要使用 root 用户运行此脚本"
-        exit 1
-    fi
     
     # 创建目录
     create_directories
@@ -269,6 +471,12 @@ main() {
     # 设置权限
     set_permissions
     
+    # 配置定时任务
+    setup_cron
+    
+    # 配置队列守护进程
+    setup_queue
+    
     log_success "============================================"
     log_success "安装完成！"
     if [ -n "$VERSION" ]; then
@@ -279,11 +487,41 @@ main() {
     # 显示后续步骤
     echo
     log_info "后续步骤："
-    log_info "1. 配置数据库: vim $DEPLOY_ROOT/backend/.env"
-    log_info "2. 配置 Nginx: sudo ln -sf $DEPLOY_ROOT/nginx/manager.conf /etc/nginx/sites-enabled/"
-    log_info "3. 重启 Nginx: sudo systemctl restart nginx"
-    log_info "4. 访问安装向导: http://your-domain/install.php"
-    log_info "5. 完成后删除: rm $DEPLOY_ROOT/backend/public/install.php"
+    log_info "1. 配置数据库: vim $SITE_ROOT/backend/.env"
+    log_info "2. 运行迁移: cd $SITE_ROOT/backend && php artisan migrate"
+    log_info "3. 访问安装向导: http://your-domain/install.php"
+    log_info "4. 完成后删除: rm $SITE_ROOT/backend/public/install.php"
+    
+    if check_bt_panel; then
+        echo
+        log_warning "宝塔面板用户请确保完成："
+        log_warning "- Nginx 配置引入"
+        log_warning "- 定时任务添加"
+        log_warning "- 队列守护进程配置"
+    fi
+    
+    # 询问是否执行依赖安装
+    echo
+    log_info "运行环境检查："
+    read -p "是否需要检查并安装运行环境依赖？(y/n): " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        DEPS_SCRIPT="$SCRIPT_DIR/install-deps.sh"
+        if [ -f "$DEPS_SCRIPT" ]; then
+            log_info "执行依赖安装脚本..."
+            bash "$DEPS_SCRIPT"
+        else
+            log_warning "依赖安装脚本不存在: $DEPS_SCRIPT"
+            log_info "请手动安装以下依赖："
+            log_info "- PHP 8.3+ 及相关扩展"
+            log_info "- Nginx Web 服务器"
+            log_info "- MySQL 8.0+ 数据库"
+            log_info "- Redis 缓存服务"
+            log_info "- Supervisor 队列管理器"
+        fi
+    else
+        log_info "跳过依赖安装，请确保已安装必需的运行环境"
+    fi
 }
 
 # 执行主函数
