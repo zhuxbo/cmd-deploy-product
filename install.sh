@@ -394,8 +394,8 @@ setup_queue() {
         log_warning "   名称: laravel-worker-$SITE_NAME"
         log_warning "   启动用户: www"
         log_warning "   运行目录: $SITE_ROOT/backend"
-        log_warning "   启动命令: php artisan queue:work --sleep=3 --tries=3 --max-time=3600"
-        log_warning "   进程数量: 2"
+        log_warning "   启动命令: php artisan queue:work --queue Task"
+        log_warning "   进程数量: 1"
         log_warning "========================="
     else
         log_info "配置队列守护进程（站点：$SITE_NAME）..."
@@ -407,14 +407,14 @@ setup_queue() {
             sudo tee "$SUPERVISOR_CONF" > /dev/null <<EOF
 [program:laravel-worker-$SITE_NAME]
 process_name=%(program_name)s_%(process_num)02d
-command=php artisan queue:work --sleep=3 --tries=3 --max-time=3600
+command=php artisan queue:work --queue Task
 directory=$SITE_ROOT/backend
 autostart=true
 autorestart=true
 stopasgroup=true
 killasgroup=true
 user=$SITE_OWNER
-numprocs=2
+numprocs=1
 redirect_stderr=true
 stdout_logfile=$SITE_ROOT/backend/storage/logs/worker.log
 stopwaitsecs=3600
@@ -529,8 +529,8 @@ main() {
         log_warning "   - 进入软件商店 -> Supervisor管理器"
         log_warning "   - 名称: laravel-worker-$SITE_NAME"
         log_warning "   - 目录: $SITE_ROOT/backend"
-        log_warning "   - 命令: php artisan queue:work --sleep=3 --tries=3"
-        log_warning "   - 进程数: 2"
+        log_warning "   - 命令: php artisan queue:work --queue Task"
+        log_warning "   - 进程数: 1"
         log_warning "============================"
     fi
 }
