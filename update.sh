@@ -302,6 +302,11 @@ optimize_backend() {
             else
                 log_warning "自动加载优化失败，但不影响应用运行"
                 log_info "Laravel 将使用基础自动加载器，性能可能稍有影响"
+                echo
+                log_info "如需手动尝试优化，请执行以下命令："
+                log_info "cd $SITE_ROOT/backend"
+                log_info "sudo -u $SITE_OWNER composer dump-autoload --optimize --no-dev"
+                echo
             fi
         else
             log_warning "Composer 未安装，跳过自动加载优化"
