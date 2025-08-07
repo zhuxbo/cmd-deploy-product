@@ -223,21 +223,18 @@ set_permissions() {
         # 设置基础目录权限为755
         sudo chmod 755 "$SITE_ROOT/backend"
         
-        # 代码文件设置为644（只读）
-        find "$SITE_ROOT/backend" -type f -name "*.php" -exec sudo chmod 644 {} \;
-        find "$SITE_ROOT/backend" -type f -name "*.js" -exec sudo chmod 644 {} \;
-        find "$SITE_ROOT/backend" -type f -name "*.css" -exec sudo chmod 644 {} \;
-        find "$SITE_ROOT/backend" -type f -name "*.xml" -exec sudo chmod 644 {} \;
-        find "$SITE_ROOT/backend" -type f -name "*.yml" -exec sudo chmod 644 {} \;
-        find "$SITE_ROOT/backend" -type f -name "*.yaml" -exec sudo chmod 644 {} \;
-        find "$SITE_ROOT/backend" -type f -name "*.md" -exec sudo chmod 644 {} \;
-        find "$SITE_ROOT/backend" -type f -name "*.txt" -exec sudo chmod 644 {} \;
-        
-        # 配置文件保持644权限
-        find "$SITE_ROOT/backend" -name ".env*" -exec sudo chmod 644 {} \;
+        # 代码文件设置为644（只读）- 合并多个find命令提高性能
+        find "$SITE_ROOT/backend" -type f \( \
+            -name "*.php" -o -name "*.js" -o -name "*.css" -o -name "*.xml" -o \
+            -name "*.yml" -o -name "*.yaml" -o -name "*.md" -o -name "*.txt" -o \
+            -name ".env*" \
+        \) -not -path "$SITE_ROOT/backend/storage/*" -not -path "$SITE_ROOT/backend/bootstrap/cache/*" \
+        -exec sudo chmod 644 {} +
         
         # JSON文件特殊处理 - 某些可能需要写入权限
-        find "$SITE_ROOT/backend" -type f -name "*.json" -not -path "$SITE_ROOT/backend/storage/*" -not -path "$SITE_ROOT/backend/bootstrap/cache/*" -exec sudo chmod 644 {} \;
+        find "$SITE_ROOT/backend" -type f -name "*.json" \
+        -not -path "$SITE_ROOT/backend/storage/*" -not -path "$SITE_ROOT/backend/bootstrap/cache/*" \
+        -exec sudo chmod 644 {} +
         
         # Laravel 特殊文件处理
         if [ -f "$SITE_ROOT/backend/artisan" ]; then
@@ -249,7 +246,7 @@ set_permissions() {
             sudo chown -R "$SITE_OWNER:$SITE_GROUP" "$SITE_ROOT/backend/storage"
             sudo chmod -R 775 "$SITE_ROOT/backend/storage"
             # storage内的文件设置为664
-            find "$SITE_ROOT/backend/storage" -type f -exec sudo chmod 664 {} \;
+            find "$SITE_ROOT/backend/storage" -type f -exec sudo chmod 664 {} +
         fi
         
         if [ -d "$SITE_ROOT/backend/bootstrap/cache" ]; then
@@ -258,7 +255,7 @@ set_permissions() {
         fi
         
         # 其他目录设置为755
-        find "$SITE_ROOT/backend" -type d -not -path "$SITE_ROOT/backend/storage*" -not -path "$SITE_ROOT/backend/bootstrap/cache*" -exec sudo chmod 755 {} \;
+        find "$SITE_ROOT/backend" -type d -not -path "$SITE_ROOT/backend/storage*" -not -path "$SITE_ROOT/backend/bootstrap/cache*" -exec sudo chmod 755 {} +
     fi
     
     # 设置前端权限
@@ -269,10 +266,14 @@ set_permissions() {
         sudo chown -R "$SITE_OWNER:$SITE_GROUP" "$SITE_ROOT/frontend"
         
         # 目录权限755
-        find "$SITE_ROOT/frontend" -type d -exec sudo chmod 755 {} \;
+        find "$SITE_ROOT/frontend" -type d -exec sudo chmod 755 {} +
         
         # 代码文件设置为644（只读）
-        find "$SITE_ROOT/frontend" -type f \( -name "*.html" -o -name "*.js" -o -name "*.css" -o -name "*.json" -o -name "*.svg" -o -name "*.png" -o -name "*.jpg" -o -name "*.jpeg" -o -name "*.gif" -o -name "*.ico" -o -name "*.xml" -o -name "*.txt" -o -name "*.md" \) -exec sudo chmod 644 {} \;
+        find "$SITE_ROOT/frontend" -type f \( \
+            -name "*.html" -o -name "*.js" -o -name "*.css" -o -name "*.json" -o \
+            -name "*.svg" -o -name "*.png" -o -name "*.jpg" -o -name "*.jpeg" -o \
+            -name "*.gif" -o -name "*.ico" -o -name "*.xml" -o -name "*.txt" -o -name "*.md" \
+        \) -exec sudo chmod 644 {} +
     fi
     
     # 设置nginx目录权限
@@ -280,7 +281,7 @@ set_permissions() {
         log_info "设置nginx目录权限..."
         sudo chown -R "$SITE_OWNER:$SITE_GROUP" "$SITE_ROOT/nginx"
         sudo chmod -R 755 "$SITE_ROOT/nginx"
-        find "$SITE_ROOT/nginx" -type f -exec sudo chmod 644 {} \;
+        find "$SITE_ROOT/nginx" -type f -exec sudo chmod 644 {} +
     fi
     
     log_success "权限设置完成"

@@ -18,6 +18,54 @@ log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 log_warning() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 
+# 版本比较函数
+version_compare() {
+    local version1="$1"
+    local version2="$2"
+    
+    # 移除 v 前缀和后缀信息
+    version1=$(echo "$version1" | sed 's/^v//' | sed 's/-.*//')
+    version2=$(echo "$version2" | sed 's/^v//' | sed 's/-.*//')
+    
+    # 使用 sort -V 进行版本比较
+    if command -v sort >/dev/null 2>&1; then
+        # 如果 version1 在排序后是最高版本，则 version1 >= version2
+        local sorted_versions=$(printf '%s\n%s' "$version1" "$version2" | sort -V)
+        local lowest=$(echo "$sorted_versions" | head -n1)
+        [ "$lowest" = "$version2" ] && return 0 || return 1
+    else
+        # 降级到简单的数字比较
+        local v1_major=$(echo "$version1" | cut -d. -f1)
+        local v1_minor=$(echo "$version1" | cut -d. -f2)
+        local v1_patch=$(echo "$version1" | cut -d. -f3)
+        
+        local v2_major=$(echo "$version2" | cut -d. -f1)
+        local v2_minor=$(echo "$version2" | cut -d. -f2)
+        local v2_patch=$(echo "$version2" | cut -d. -f3)
+        
+        # 比较主版本号
+        if [ "$v1_major" -gt "$v2_major" ]; then
+            return 0
+        elif [ "$v1_major" -lt "$v2_major" ]; then
+            return 1
+        fi
+        
+        # 比较次版本号
+        if [ "$v1_minor" -gt "$v2_minor" ]; then
+            return 0
+        elif [ "$v1_minor" -lt "$v2_minor" ]; then
+            return 1
+        fi
+        
+        # 比较补丁版本号
+        if [ "$v1_patch" -ge "$v2_patch" ]; then
+            return 0
+        else
+            return 1
+        fi
+    fi
+}
+
 # 检测宝塔面板
 check_bt_panel() {
     # 多种方式检测宝塔面板
@@ -130,28 +178,70 @@ check_php_version() {
     fi
 }
 
+# 检查PHP函数
+check_php_functions() {
+    log_info "检查PHP函数可用性..."
+    
+    local required_functions=("exec" "putenv" "pcntl_signal" "pcntl_alarm")
+    local optional_functions=("proc_open")
+    local all_good=true
+    
+    # 使用找到的PHP命令检测函数
+    PHP_CMD=${PHP_CMD:-php}
+    
+    # 检查必需函数
+    for func in "${required_functions[@]}"; do
+        if $PHP_CMD -r "echo function_exists('$func') && !in_array('$func', array_map('trim', explode(',', ini_get('disable_functions')))) ? 'yes' : 'no';" 2>/dev/null | grep -q "yes"; then
+            log_success "函数 $func: 可用"
+        else
+            log_error "函数 $func: 被禁用或不存在"
+            all_good=false
+        fi
+    done
+    
+    # 检查可选函数
+    for func in "${optional_functions[@]}"; do
+        if $PHP_CMD -r "echo function_exists('$func') && !in_array('$func', array_map('trim', explode(',', ini_get('disable_functions')))) ? 'yes' : 'no';" 2>/dev/null | grep -q "yes"; then
+            log_success "函数 $func: 可用 (可选)"
+        else
+            log_warning "函数 $func: 被禁用或不存在 (可选，但推荐启用)"
+        fi
+    done
+    
+    if [ "$all_good" = false ]; then
+        log_warning "某些必需的PHP函数被禁用，请检查php.ini配置"
+        log_info "需要启用的函数: ${required_functions[*]}"
+        return 1
+    fi
+    
+    return 0
+}
+
 # 检测PHP扩展
 check_php_extensions() {
     log_info "检测 PHP 扩展..."
     
     REQUIRED_EXTENSIONS=(
         "bcmath"
+        "calendar"
         "ctype"
         "curl"
         "dom"
         "fileinfo"
+        "gd"
+        "iconv"
+        "intl"
         "json"
         "mbstring"
         "openssl"
+        "pcntl"
         "pcre"
         "pdo"
         "pdo_mysql"
+        "redis"
         "tokenizer"
         "xml"
         "zip"
-        "gd"
-        "intl"
-        "redis"
     )
     
     MISSING_EXTENSIONS=()
@@ -198,15 +288,19 @@ install_php_ubuntu() {
         ${PHP_PKG_PREFIX}-cli \
         ${PHP_PKG_PREFIX}-fpm \
         ${PHP_PKG_PREFIX}-bcmath \
+        ${PHP_PKG_PREFIX}-calendar \
         ${PHP_PKG_PREFIX}-curl \
         ${PHP_PKG_PREFIX}-dom \
+        ${PHP_PKG_PREFIX}-fileinfo \
+        ${PHP_PKG_PREFIX}-gd \
+        ${PHP_PKG_PREFIX}-iconv \
+        ${PHP_PKG_PREFIX}-intl \
         ${PHP_PKG_PREFIX}-mbstring \
         ${PHP_PKG_PREFIX}-mysql \
+        ${PHP_PKG_PREFIX}-pcntl \
+        ${PHP_PKG_PREFIX}-redis \
         ${PHP_PKG_PREFIX}-xml \
         ${PHP_PKG_PREFIX}-zip \
-        ${PHP_PKG_PREFIX}-gd \
-        ${PHP_PKG_PREFIX}-intl \
-        ${PHP_PKG_PREFIX}-redis \
         ${PHP_PKG_PREFIX}-opcache
     
     # 启用 PHP-FPM
@@ -243,17 +337,22 @@ install_php_centos() {
         php-cli \
         php-fpm \
         php-bcmath \
+        php-calendar \
         php-common \
         php-curl \
+        php-fileinfo \
+        php-gd \
+        php-iconv \
+        php-intl \
+        php-json \
         php-mbstring \
         php-mysqlnd \
-        php-xml \
-        php-zip \
-        php-gd \
-        php-intl \
-        php-pecl-redis \
         php-opcache \
-        php-json
+        php-pcntl \
+        php-pecl-redis \
+        php-process \
+        php-xml \
+        php-zip
     
     # 启用 PHP-FPM
     sudo systemctl enable php-fpm
@@ -275,17 +374,22 @@ install_php_fedora() {
         php-cli \
         php-fpm \
         php-bcmath \
+        php-calendar \
         php-common \
         php-curl \
+        php-fileinfo \
+        php-gd \
+        php-iconv \
+        php-intl \
+        php-json \
         php-mbstring \
         php-mysqlnd \
-        php-xml \
-        php-zip \
-        php-gd \
-        php-intl \
-        php-pecl-redis \
         php-opcache \
-        php-json
+        php-pcntl \
+        php-pecl-redis \
+        php-process \
+        php-xml \
+        php-zip
     
     # 启用 PHP-FPM
     sudo systemctl enable php-fpm
@@ -306,15 +410,19 @@ install_php_suse() {
         php8-cli \
         php8-fpm \
         php8-bcmath \
+        php8-calendar \
         php8-curl \
+        php8-fileinfo \
+        php8-gd \
+        php8-iconv \
+        php8-intl \
         php8-mbstring \
         php8-mysql \
-        php8-xml \
-        php8-zip \
-        php8-gd \
-        php8-intl \
+        php8-opcache \
+        php8-pcntl \
         php8-redis \
-        php8-opcache
+        php8-xml \
+        php8-zip
     
     # 启用 PHP-FPM
     sudo systemctl enable php-fpm
@@ -386,13 +494,23 @@ handle_bt_panel() {
     log_warning "3. 安装 PHP 8.3"
     log_warning "4. 点击 PHP 8.3 的【设置】"
     log_warning "5. 在【安装扩展】中安装以下扩展："
-    log_warning "   - fileinfo（必需）"
-    log_warning "   - redis（必需）"
-    log_warning "   - opcache（推荐）"
-    log_warning "   - intl（推荐）"
+    log_warning "   宝塔面板需要手动安装的扩展："
+    log_warning "   - calendar（必需）- 日历功能"
+    log_warning "   - fileinfo（必需）- 文件类型检测"
+    log_warning "   - mbstring（必需）- 多字节字符串处理"
+    log_warning "   - redis（必需）- Redis缓存支持"
+    log_warning "   推荐安装的扩展："
+    log_warning "   - opcache（性能优化）- PHP字节码缓存"
+    log_warning "   - intl（国际化支持）- 国际化扩展"
     log_warning "6. 在网站设置中选择 PHP 8.3"
+    log_warning "7. 检查PHP函数是否被禁用（参考后续提示）"
     log_warning ""
-    log_warning "提示：其他常用扩展通常已默认安装"
+    log_warning "提示：bcmath, ctype, curl, dom, gd, iconv, json, openssl, pcntl"
+    log_warning "     pdo, pdo_mysql, tokenizer, xml, zip 通常已默认安装"
+    log_warning ""
+    log_warning "PHP函数检查：如果后续检查发现函数被禁用，"
+    log_warning "请在宝塔面板PHP设置中移除禁用函数列表中的："
+    log_warning "exec, putenv, pcntl_signal, pcntl_alarm, proc_open"
     log_warning "============================="
     
     read -p "是否已完成上述配置？(y/n): " -n 1 -r
@@ -410,6 +528,272 @@ handle_bt_panel() {
     else
         log_info "请完成配置后重新运行此脚本"
         exit 0
+    fi
+}
+
+# 检查Composer版本和可用性
+check_composer() {
+    log_info "检查Composer..."
+    
+    # 首先检查 timeout 命令是否可用
+    if ! command -v timeout >/dev/null 2>&1; then
+        log_warning "timeout 命令不可用，尝试安装 coreutils..."
+        if command -v apt-get >/dev/null 2>&1; then
+            sudo apt-get update && sudo apt-get install -y coreutils || true
+        elif command -v yum >/dev/null 2>&1; then
+            sudo yum install -y coreutils || true
+        fi
+    fi
+    
+    if command -v composer >/dev/null 2>&1; then
+        # 设置临时环境变量避免交互式提示
+        export COMPOSER_NO_INTERACTION=1
+        export COMPOSER_ALLOW_SUPERUSER=1
+        
+        # 使用更短的超时时间，并添加kill信号
+        local composer_output=$(timeout -k 3s 10s composer --version 2>&1 | grep -v "Deprecated\|Warning" | head -1)
+        local exit_code=$?
+        
+        # 检查是否超时（timeout 返回码为 124）
+        if [ $exit_code -eq 124 ]; then
+            log_warning "Composer 执行超时，可能存在网络问题"
+            log_info "尝试使用离线模式..."
+            # 尝试离线模式
+            composer_output=$(timeout -k 3s 10s composer --version --no-plugins 2>&1 | grep -v "Deprecated\|Warning" | head -1)
+            if [ -n "$composer_output" ]; then
+                local composer_version=$(echo "$composer_output" | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' | head -1)
+                log_success "Composer (离线模式): $composer_version"
+                return 0
+            else
+                log_warning "Composer 可能需要重新安装"
+                return 1
+            fi
+        elif [ -n "$composer_output" ]; then
+            local composer_version=$(echo "$composer_output" | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' | head -1)
+            if [ -n "$composer_version" ]; then
+                log_success "Composer $composer_version 已安装"
+                
+                # 检查版本是否低于 2.8
+                if ! version_compare "$composer_version" "2.8.0"; then
+                    log_warning "Composer 版本 $composer_version 低于推荐版本 2.8.0"
+                    if ! check_bt_panel; then
+                        log_info "尝试更新Composer..."
+                        install_or_update_composer
+                    else
+                        log_info "宝塔环境，请手动更新Composer或使用系统自带版本"
+                    fi
+                fi
+                return 0
+            else
+                log_warning "Composer 已安装但版本信息异常"
+                return 0  # 仍然认为可用
+            fi
+        else
+            # 尝试获取任何输出，即使有警告
+            local full_output=$(timeout -k 3s 10s composer --version 2>&1 | head -5)
+            if [ -n "$full_output" ]; then
+                log_warning "Composer 已安装但输出包含警告"
+                log_info "建议稍后手动更新 Composer: composer self-update"
+                return 0  # 仍然认为可用
+            else
+                log_error "Composer 安装但无法执行"
+                return 1
+            fi
+        fi
+    else
+        log_warning "Composer未安装"
+        return 1
+    fi
+}
+
+# 安装或更新Composer
+install_or_update_composer() {
+    log_info "安装或更新Composer..."
+    
+    # 检查是否已安装
+    if command -v composer >/dev/null 2>&1; then
+        log_info "检测到已安装的Composer，尝试更新..."
+        update_composer_robust
+    else
+        log_info "Composer未安装，开始安装..."
+        install_composer_new
+    fi
+}
+
+# 强健的Composer更新函数  
+update_composer_robust() {
+    log_info "开始更新 Composer..."
+    
+    # 检查必需的 PHP 函数
+    local required_functions=("proc_open" "proc_close" "proc_terminate" "proc_get_status")
+    local missing_functions=()
+    
+    PHP_CMD=${PHP_CMD:-php}
+    for func in "${required_functions[@]}"; do
+        if ! $PHP_CMD -r "echo function_exists('$func') && !in_array('$func', array_map('trim', explode(',', ini_get('disable_functions')))) ? 'yes' : 'no';" 2>/dev/null | grep -q "yes"; then
+            missing_functions+=("$func")
+        fi
+    done
+    
+    if [ ${#missing_functions[@]} -gt 0 ]; then
+        log_warning "以下 PHP 函数被禁用，无法使用 self-update: ${missing_functions[*]}"
+        log_info "尝试重新安装 Composer..."
+        reinstall_composer
+        return
+    fi
+    
+    # 设置环境变量
+    export COMPOSER_HOME="${COMPOSER_HOME:-$HOME/.composer}"
+    export COMPOSER_CACHE_DIR="${COMPOSER_CACHE_DIR:-$COMPOSER_HOME/cache}"
+    export COMPOSER_NO_INTERACTION=1
+    export COMPOSER_ALLOW_SUPERUSER=1
+    export COMPOSER_PROCESS_TIMEOUT=300
+    
+    # 尝试创建缓存目录
+    mkdir -p "$COMPOSER_CACHE_DIR" 2>/dev/null || true
+    
+    # 先配置中国镜像源以加速下载
+    log_info "配置 Composer 使用中国镜像源..."
+    composer config -g repo.packagist composer https://mirrors.aliyun.com/composer/ 2>/dev/null || true
+    # 设置 GitHub 镜像
+    composer config -g github-protocols https 2>/dev/null || true
+    
+    # 清理可能的缓存问题
+    log_info "清理 Composer 缓存..."
+    composer clear-cache 2>/dev/null || true
+    
+    # 检查 Composer 位置
+    local composer_path=$(which composer)
+    local use_sudo=true
+    
+    if [ -n "$composer_path" ]; then
+        log_info "Composer 位于 $composer_path"
+        if [ -w "$composer_path" ] && [ "$EUID" -eq 0 ]; then
+            log_info "以 root 用户运行，不需要 sudo"
+            use_sudo=false
+        else
+            log_info "使用 sudo 确保权限"
+        fi
+    fi
+    
+    # 构建更新命令
+    local update_cmd="composer self-update --no-interaction"
+    if [ "$use_sudo" = true ]; then
+        update_cmd="sudo -E $update_cmd"
+    fi
+    
+    log_info "执行命令: $update_cmd"
+    log_info "这可能需要几分钟，请耐心等待..."
+    
+    # 使用较长的超时时间（5分钟）
+    if timeout -k 30s 300s $update_cmd 2>&1 | tee /tmp/composer_update.log; then
+        if grep -q "successfully\|Success\|Updated\|Nothing to install\|update\|already at the latest" /tmp/composer_update.log; then
+            log_success "Composer 更新成功"
+            local new_version=$(timeout -k 3s 10s composer --version 2>&1 | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' | head -1)
+            log_success "新版本: $new_version"
+            rm -f /tmp/composer_update.log
+            return 0
+        fi
+    fi
+    
+    log_warning "self-update 可能失败，尝试重新安装..."
+    reinstall_composer
+}
+
+# 重新安装Composer
+reinstall_composer() {
+    log_info "重新安装 Composer..."
+    
+    cd /tmp
+    rm -f composer-setup.php composer.phar
+    
+    # 尝试使用国内镜像下载最新版
+    local installer_urls=(
+        "https://install.phpcomposer.com/installer"
+        "https://mirrors.aliyun.com/composer/composer.phar"
+        "https://getcomposer.org/installer"
+    )
+    
+    local download_success=false
+    
+    for url in "${installer_urls[@]}"; do
+        log_info "尝试从 $url 下载..."
+        
+        if [[ "$url" == *".phar" ]]; then
+            # 直接下载 phar 文件
+            if timeout 30s curl -sS "$url" -o composer.phar; then
+                PHP_CMD=${PHP_CMD:-php}
+                if $PHP_CMD composer.phar --version >/dev/null 2>&1; then
+                    log_success "下载 composer.phar 成功"
+                    download_success=true
+                    break
+                fi
+            fi
+        else
+            # 下载安装脚本
+            if timeout 30s curl -sS "$url" -o composer-setup.php; then
+                PHP_CMD=${PHP_CMD:-php}
+                if $PHP_CMD composer-setup.php --quiet; then
+                    rm -f composer-setup.php
+                    log_success "安装脚本执行成功"
+                    download_success=true
+                    break
+                fi
+            fi
+        fi
+    done
+    
+    if [ "$download_success" = false ]; then
+        log_error "所有下载源都失败了"
+        log_error "请手动下载安装 Composer:"
+        log_error "  wget https://getcomposer.org/download/latest-stable/composer.phar"
+        log_error "  sudo mv composer.phar /usr/local/bin/composer"
+        log_error "  sudo chmod +x /usr/local/bin/composer"
+        return 1
+    fi
+    
+    # 移动到系统目录
+    local target_paths=("/usr/local/bin/composer" "/usr/bin/composer")
+    local install_success=false
+    
+    for target in "${target_paths[@]}"; do
+        if sudo mv composer.phar "$target" 2>/dev/null && sudo chmod +x "$target" 2>/dev/null; then
+            log_success "Composer 安装到 $target"
+            install_success=true
+            break
+        fi
+    done
+    
+    if [ "$install_success" = false ]; then
+        log_error "无法安装 Composer 到任何位置"
+        return 1
+    fi
+    
+    # 配置中国镜像
+    log_info "配置 Composer 中国镜像..."
+    composer config -g repo.packagist composer https://mirrors.aliyun.com/composer/ 2>/dev/null || true
+    composer config -g github-protocols https 2>/dev/null || true
+    
+    # 验证安装
+    local final_version=$(composer --version 2>&1 | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' | head -1)
+    if [ -n "$final_version" ]; then
+        log_success "Composer $final_version 安装成功"
+        
+        if version_compare "$final_version" "2.8.0"; then
+            log_success "版本满足要求"
+        else
+            log_warning "安装的版本仍然低于 2.8.0，但这是能获取到的最新版本"
+            log_info "项目可能仍能正常工作，请继续安装"
+        fi
+    fi
+}
+
+# 新的Composer安装函数
+install_composer_new() {
+    log_info "安装Composer..."
+    
+    if ! check_composer; then
+        reinstall_composer
     fi
 }
 
@@ -571,6 +955,7 @@ show_summary() {
 main() {
     log_info "============================================"
     log_info "证书管理系统运行环境依赖安装"
+    log_info "专注于PHP扩展、函数和Composer版本检查"
     log_info "============================================"
     
     # 检测系统
@@ -580,6 +965,22 @@ main() {
     if check_bt_panel; then
         log_info "检测到宝塔面板环境"
         handle_bt_panel
+        
+        # 宝塔环境下的额外检查
+        echo
+        log_info "宝塔环境PHP函数检查..."
+        check_php_functions || log_warning "请按上述提示在宝塔面板中启用被禁用的PHP函数"
+        
+        echo  
+        log_info "宝塔环境Composer检查..."
+        if ! check_composer; then
+            log_warning "Composer未安装或版本过低"
+            log_info "建议手动安装最新版本Composer："
+            log_info "curl -sS https://getcomposer.org/installer | php"
+            log_info "sudo mv composer.phar /usr/local/bin/composer"
+            log_info "sudo chmod +x /usr/local/bin/composer"
+        fi
+        
     else
         log_info "标准 Linux 环境"
         
@@ -600,11 +1001,47 @@ main() {
         
         # 安装其他依赖
         install_other_deps
+        
+        # 检查PHP函数
+        echo
+        log_info "检查PHP函数..."
+        check_php_functions || log_warning "请检查并修复PHP函数禁用问题"
+        
+        # 检查和安装Composer
+        echo
+        log_info "检查Composer..."
+        if ! check_composer; then
+            log_info "安装Composer..."
+            install_or_update_composer
+        fi
     fi
     
     # 最终检查
+    echo
     log_info "执行最终检查..."
-    if check_php_version && check_php_extensions; then
+    
+    local all_good=true
+    
+    # PHP版本和扩展检查
+    if ! check_php_version; then
+        all_good=false
+    fi
+    
+    if ! check_php_extensions; then
+        all_good=false  
+    fi
+    
+    # PHP函数检查
+    if ! check_php_functions; then
+        log_warning "PHP函数检查未通过，但这不会阻止安装继续"
+    fi
+    
+    # Composer检查
+    if ! check_composer; then
+        log_warning "Composer检查未通过，但这不会阻止安装继续"
+    fi
+    
+    if [ "$all_good" = true ]; then
         show_summary
     else
         log_error "环境检查未通过，请查看上述错误信息"
