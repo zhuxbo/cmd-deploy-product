@@ -189,53 +189,15 @@ update_nginx_config() {
 
 # 初始化Laravel
 initialize_laravel() {
-    log_info "初始化 Laravel 应用..."
+    log_info "创建 Laravel 存储目录..."
     
     cd "$SITE_ROOT/backend"
     
-    # 创建 .env 文件
-    if [ ! -f ".env" ] && [ -f ".env.example" ]; then
-        log_info "创建 .env 配置文件..."
-        cp .env.example .env
-        log_warning "请编辑 .env 文件配置数据库等信息"
-    fi
-    
-    # 创建必要的目录
+    # 创建必要的存储目录
     mkdir -p storage/{app/public,framework/{cache,sessions,views},logs}
     mkdir -p bootstrap/cache
     
-    # 优化自动加载（使用站点所有者执行）
-    log_info "优化 Composer 自动加载..."
-    if command -v composer &> /dev/null; then
-        # 获取站点所有者
-        SITE_OWNER=$(stat -c "%U" "$SITE_ROOT")
-        sudo -u "$SITE_OWNER" composer dump-autoload --optimize --no-dev
-    else
-        log_warning "Composer 未安装，跳过优化"
-    fi
-    
-    # 检查PHP命令
-    PHP_CMD="php"
-    if check_bt_panel && [ -x "/www/server/php/83/bin/php" ]; then
-        PHP_CMD="/www/server/php/83/bin/php"
-    fi
-    
-    # 创建存储链接
-    if [ -L "public/storage" ]; then
-        rm public/storage
-    fi
-    $PHP_CMD artisan storage:link
-    
-    # 运行包发现
-    $PHP_CMD artisan package:discover --ansi
-    
-    # 生成应用密钥（如果没有）
-    if ! grep -q "^APP_KEY=base64:" .env; then
-        log_info "生成应用密钥..."
-        $PHP_CMD artisan key:generate
-    fi
-    
-    log_success "Laravel 初始化完成"
+    log_success "存储目录创建完成"
     
     cd "$SCRIPT_DIR"
 }
