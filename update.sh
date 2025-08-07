@@ -32,6 +32,19 @@ CONFIG_FILE="$SCRIPT_DIR/update-config.json"
 # 生产代码仓库（使用HTTPS地址，避免SSH密钥问题）
 PRODUCTION_REPO="https://gitee.com/zhuxbo/production-code.git"
 
+# 临时保留目录
+TEMP_PRESERVE_DIR=""
+
+# 清理函数
+cleanup() {
+    if [ -n "$TEMP_PRESERVE_DIR" ] && [ -d "$TEMP_PRESERVE_DIR" ]; then
+        rm -rf "$TEMP_PRESERVE_DIR"
+    fi
+}
+
+# 设置退出陷阱
+trap cleanup EXIT INT TERM
+
 # 更新模块
 UPDATE_MODULE="${1:-all}"
 VALID_MODULES=("api" "admin" "user" "easy" "all")
@@ -42,6 +55,19 @@ if [[ ! " ${VALID_MODULES[@]} " =~ " ${UPDATE_MODULE} " ]]; then
     log_info "用法: $0 [all|api|admin|user|easy]"
     exit 1
 fi
+
+# 检查必要的命令
+check_dependencies() {
+    # 检查 jq 命令
+    if ! command -v jq >/dev/null 2>&1; then
+        log_error "jq 命令未安装，这是解析配置文件所必需的"
+        log_info "请先安装 jq："
+        log_info "  Ubuntu/Debian: sudo apt-get install jq"
+        log_info "  CentOS/RHEL: sudo yum install jq"
+        log_info "  其他系统: 请参考 https://stedolan.github.io/jq/download/"
+        exit 1
+    fi
+}
 
 # 检测宝塔面板
 check_bt_panel() {
@@ -229,10 +255,8 @@ restore_preserve_files() {
         done
     fi
     
-    # 清理临时目录
-    rm -rf "$TEMP_PRESERVE_DIR"
-    
     log_success "文件恢复完成"
+    log_info "临时文件将在脚本结束时自动清理"
 }
 
 # 部署新文件
@@ -288,8 +312,14 @@ optimize_backend() {
         
         # 检查PHP命令
         PHP_CMD="php"
-        if check_bt_panel && [ -x "/www/server/php/83/bin/php" ]; then
-            PHP_CMD="/www/server/php/83/bin/php"
+        if check_bt_panel; then
+            # 检查可用的宝塔PHP版本（83, 84, 85等）
+            for ver in 85 84 83; do
+                if [ -x "/www/server/php/$ver/bin/php" ]; then
+                    PHP_CMD="/www/server/php/$ver/bin/php"
+                    break
+                fi
+            done
         fi
         
         # 优化 Composer 自动加载（使用站点所有者执行）
@@ -447,8 +477,8 @@ reload_services() {
         log_warning "- 重启 PHP-FPM"
         log_warning "- 重启队列守护进程"
     else
-        # 重载 Nginx
-        if [ "$UPDATE_MODULE" = "all" ] || [ "$UPDATE_MODULE" != "api" ]; then
+        # 重载 Nginx（在更新前端或全量更新时）
+        if [ "$UPDATE_MODULE" = "all" ] || [ "$UPDATE_MODULE" = "admin" ] || [ "$UPDATE_MODULE" = "user" ] || [ "$UPDATE_MODULE" = "easy" ]; then
             NGINX_RELOAD=$(jq -r '.services.nginx.reload_command' "$CONFIG_FILE")
             if eval "$NGINX_RELOAD" 2>/dev/null; then
                 log_success "Nginx 已重载"
@@ -530,6 +560,9 @@ main() {
     log_info "更新模块: $UPDATE_MODULE"
     log_info "站点目录: $SITE_ROOT"
     log_info "============================================"
+    
+    # 检查依赖命令
+    check_dependencies
     
     # 加载配置
     load_config

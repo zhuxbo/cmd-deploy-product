@@ -35,6 +35,19 @@ KEEP_BACKUPS=${KEEP_BACKUPS:-7}
 # 操作模式
 ACTION="${1:-backup}"
 
+# 临时目录变量
+TEMP_DIR=""
+
+# 清理函数
+cleanup() {
+    if [ -n "$TEMP_DIR" ] && [ -d "$TEMP_DIR" ]; then
+        rm -rf "$TEMP_DIR"
+    fi
+}
+
+# 设置退出陷阱
+trap cleanup EXIT INT TERM
+
 # 显示使用帮助
 show_usage() {
     echo "证书管理系统备份工具"
@@ -207,9 +220,6 @@ EOF
     tar -czf "$BACKUP_PACKAGE" .
     cd - > /dev/null
     
-    # 清理临时目录
-    rm -rf "$TEMP_DIR"
-    
     # 删除单独的备份文件
     rm -f "$env_backup" "$db_backup"
     
@@ -269,8 +279,8 @@ list_backups() {
         if [ -f "$file" ]; then
             FILENAME=$(basename "$file")
             SIZE=$(du -h "$file" | cut -f1)
-            # 从文件名提取时间戳
-            TIMESTAMP=$(echo "$FILENAME" | grep -oP 'backup_\K\d{8}_\d{6}')
+            # 从文件名提取时间戳（兼容性更好的方法）
+            TIMESTAMP=$(echo "$FILENAME" | sed -n 's/.*backup_\([0-9]\{8\}_[0-9]\{6\}\).*/\1/p')
             if [ -n "$TIMESTAMP" ]; then
                 DATE_PART=$(echo "$TIMESTAMP" | cut -d'_' -f1)
                 TIME_PART=$(echo "$TIMESTAMP" | cut -d'_' -f2)
@@ -329,14 +339,12 @@ restore_backup() {
     log_info "解压备份文件..."
     if ! tar -xzf "$backup_file" -C "$TEMP_DIR"; then
         log_error "解压备份文件失败"
-        rm -rf "$TEMP_DIR"
         exit 1
     fi
     
     # 验证备份内容
     if [ ! -f "$TEMP_DIR/env.backup" ] || [ ! -f "$TEMP_DIR/database.sql.gz" ]; then
         log_error "备份文件内容不完整"
-        rm -rf "$TEMP_DIR"
         exit 1
     fi
     
@@ -372,7 +380,6 @@ restore_backup() {
     if ! command -v mysql &> /dev/null; then
         log_error "mysql 命令未找到"
         log_error "请安装 MySQL 客户端: apt-get install mysql-client"
-        rm -rf "$TEMP_DIR"
         exit 1
     fi
     
@@ -392,15 +399,11 @@ restore_backup() {
             cp "$RESTORE_BACKUP_DIR/env.backup" "$ENV_FILE"
             log_info "已恢复原始 .env 文件"
         fi
-        rm -rf "$TEMP_DIR"
         exit 1
     fi
     
     # 清除密码环境变量
     unset MYSQL_PWD
-    
-    # 清理临时目录
-    rm -rf "$TEMP_DIR"
     
     log_success "============================================"
     log_success "恢复完成！"
