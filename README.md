@@ -156,7 +156,7 @@ site-root/               # 站点根目录
 ```bash
 # 1. 在站点根目录中克隆部署脚本
 cd /path/to/your-site
-git clone git@gitee.com:zhuxbo/cmd-deploy-product.git deploy
+git clone https://gitee.com/zhuxbo/cmd-deploy-product.git deploy
 cd deploy
 
 # 2. 安装系统（会自动提示是否安装依赖）

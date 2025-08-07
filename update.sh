@@ -29,8 +29,8 @@ BACKUP_DIR="$SITE_ROOT/backup/update"
 # 配置文件
 CONFIG_FILE="$SCRIPT_DIR/update-config.json"
 
-# 生产代码仓库
-PRODUCTION_REPO="git@gitee.com:zhuxbo/production-code.git"
+# 生产代码仓库（使用HTTPS地址，避免SSH密钥问题）
+PRODUCTION_REPO="https://gitee.com/zhuxbo/production-code.git"
 
 # 更新模块
 UPDATE_MODULE="${1:-all}"
