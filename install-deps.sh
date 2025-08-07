@@ -478,7 +478,7 @@ select_bt_php_version() {
         log_info "检测到多个可用的 PHP 版本："
         for i in "${!BT_PHP_VERSIONS[@]}"; do
             local ver="${BT_PHP_VERSIONS[i]}"
-            echo "  $((i+1)). PHP 8.$((ver/10)) (/www/server/php/$ver/bin/php)"
+            echo "  $((i+1)). PHP 8.${ver: -1} (/www/server/php/$ver/bin/php)"
         done
         echo
         
@@ -544,9 +544,9 @@ handle_bt_panel() {
     # 选择PHP版本
     if select_bt_php_version; then
         if [ ${#BT_PHP_VERSIONS[@]} -eq 1 ]; then
-            log_success "检测到 PHP 8.$((PHP_VERSION/10))，设置为默认版本"
+            log_success "检测到 PHP 8.${PHP_VERSION: -1}，设置为默认版本"
         else
-            log_success "已选择 PHP 8.$((PHP_VERSION/10))"
+            log_success "已选择 PHP 8.${PHP_VERSION: -1}"
         fi
         log_info "PHP 路径: $PHP_CMD"
         
@@ -594,7 +594,7 @@ handle_bt_panel() {
         
         if [ "$functions_ok" = false ]; then
             log_warning "1. 【PHP函数启用】"
-            log_warning "   - 点击 PHP 8.$((PHP_VERSION/10)) 的【设置】"
+            log_warning "   - 点击 PHP 8.${PHP_VERSION: -1} 的【设置】"
             log_warning "   - 进入【禁用函数】选项卡"
             log_warning "   - 从禁用列表中移除以下函数："
             log_warning "     exec, putenv, pcntl_signal, pcntl_alarm, proc_open"
@@ -620,7 +620,7 @@ handle_bt_panel() {
         fi
         
         log_warning "3. 【网站PHP版本】"
-        log_warning "   - 在网站设置中选择 PHP 8.$((PHP_VERSION/10))+"
+        log_warning "   - 在网站设置中选择 PHP 8.${PHP_VERSION: -1}+"
         echo
         
         log_warning "提示：bcmath, ctype, curl, dom, gd, iconv, json, openssl,"
