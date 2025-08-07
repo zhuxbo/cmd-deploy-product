@@ -441,9 +441,9 @@ main() {
     
     # 显示后续步骤
     echo
-    log_info "后续步骤："
-    log_info "访问安装向导: http://your-domain/api/install.php"
-    log_info "（安装向导将自动处理数据库配置、迁移和初始化等所有步骤）"
+    log_warning "后续步骤："
+    log_warning "访问安装向导: http://your-domain/api/install.php"
+    log_warning "（安装向导将自动处理数据库配置、迁移和初始化等所有安装步骤）"
     
     # 询问是否执行依赖安装
     echo
