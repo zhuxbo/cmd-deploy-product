@@ -180,96 +180,59 @@ check_php_version() {
 
 # 检查PHP函数（宝塔环境特殊处理）
 check_php_functions() {
-    log_info "检查PHP函数可用性..."
-    
     local required_functions=("exec" "putenv" "pcntl_signal" "pcntl_alarm")
     local optional_functions=("proc_open")
-    local all_good=true
+    local disabled_required=()
+    local disabled_optional=()
     
     # 使用找到的PHP命令检测函数
     PHP_CMD=${PHP_CMD:-php}
     
     if check_bt_panel && [ -n "$PHP_VERSION" ]; then
-        # 宝塔环境：分别检查CLI和FPM配置
-        log_info "宝塔环境检测到，分别检查CLI和FPM的函数配置..."
-        
+        # 宝塔环境：检查两个配置文件
         local fpm_ini="/www/server/php/$PHP_VERSION/etc/php.ini"
         local cli_ini="/www/server/php/$PHP_VERSION/etc/php-cli.ini"
         
-        log_info "检查FPM配置 ($fpm_ini)..."
-        local fpm_good=true
-        # 检查FPM配置中的禁用函数
+        # 静默检查FPM配置
         if [ -f "$fpm_ini" ]; then
             local disabled_funcs=$(grep "^disable_functions" "$fpm_ini" 2>/dev/null | sed 's/disable_functions = //' | tr ',' ' ')
             for func in "${required_functions[@]}"; do
                 if echo "$disabled_funcs" | grep -q "\\b$func\\b"; then
-                    log_error "FPM函数 $func: 被禁用"
-                    fpm_good=false
-                    all_good=false
-                else
-                    log_success "FPM函数 $func: 可用"
+                    disabled_required+="$func"
                 fi
             done
-        else
-            log_warning "FPM配置文件不存在: $fpm_ini"
         fi
         
-        log_info "检查CLI配置 ($cli_ini)..."
-        local cli_good=true
-        # 检查CLI配置中的禁用函数  
+        # 静默检查CLI配置  
         if [ -f "$cli_ini" ]; then
             local disabled_funcs=$(grep "^disable_functions" "$cli_ini" 2>/dev/null | sed 's/disable_functions = //' | tr ',' ' ')
             for func in "${required_functions[@]}"; do
                 if echo "$disabled_funcs" | grep -q "\\b$func\\b"; then
-                    log_error "CLI函数 $func: 被禁用"
-                    cli_good=false
-                    all_good=false
-                else
-                    log_success "CLI函数 $func: 可用"
+                    if [[ ! " ${disabled_required[@]} " =~ " ${func} " ]]; then
+                        disabled_required+="$func"
+                    fi
                 fi
             done
-        else
-            log_warning "CLI配置文件不存在: $cli_ini"
         fi
-        
-        # 宝塔环境提示
-        if [ "$fpm_good" = false ] || [ "$cli_good" = false ]; then
-            log_warning "检测到函数被禁用，需要在宝塔面板中修改："
-            log_warning "     FPM: /www/server/php/${PHP_VERSION}/etc/php.ini"
-            log_warning "     CLI: /www/server/php/${PHP_VERSION}/etc/php-cli.ini"
-            log_warning "请在宝塔面板 -> 软件商店 -> PHP${PHP_VERSION: -1}.${PHP_VERSION: -2:-1} -> 配置修改 -> 禁用函数 中移除以上函数"
-        fi
-        
     else
-        # 标准环境：使用当前PHP命令检测
-        # 检查必需函数
+        # 标准环境：检查函数
         for func in "${required_functions[@]}"; do
-            if $PHP_CMD -r "echo function_exists('$func') && !in_array('$func', array_map('trim', explode(',', ini_get('disable_functions')))) ? 'yes' : 'no';" 2>/dev/null | grep -q "yes"; then
-                log_success "函数 $func: 可用"
-            else
-                log_error "函数 $func: 被禁用或不存在"
-                all_good=false
+            if ! $PHP_CMD -r "echo function_exists('$func') && !in_array('$func', array_map('trim', explode(',', ini_get('disable_functions')))) ? 'yes' : 'no';" 2>/dev/null | grep -q "yes"; then
+                disabled_required+="$func"
             fi
         done
     fi
     
     # 检查可选函数
     for func in "${optional_functions[@]}"; do
-        if $PHP_CMD -r "echo function_exists('$func') && !in_array('$func', array_map('trim', explode(',', ini_get('disable_functions')))) ? 'yes' : 'no';" 2>/dev/null | grep -q "yes"; then
-            log_success "函数 $func: 可用 (可选)"
-        else
-            log_warning "函数 $func: 被禁用或不存在 (可选，但推荐启用)"
+        if ! $PHP_CMD -r "echo function_exists('$func') && !in_array('$func', array_map('trim', explode(',', ini_get('disable_functions')))) ? 'yes' : 'no';" 2>/dev/null | grep -q "yes"; then
+            disabled_optional+="$func"
         fi
     done
     
-    if [ "$all_good" = false ]; then
-        if check_bt_panel; then
-            log_warning "某些必需的PHP函数被禁用，需要在宝塔面板中处理CLI和FPM配置"
-            log_info "需要启用的函数: ${required_functions[*]}"
-        else
-            log_warning "某些必需的PHP函数被禁用，请检查php.ini配置"
-            log_info "需要启用的函数: ${required_functions[*]}"
-        fi
+    # 只在有问题时输出
+    if [ ${#disabled_required[@]} -gt 0 ]; then
+        # 返回失败，让调用者决定是否自动修复
         return 1
     fi
     
@@ -566,92 +529,28 @@ select_bt_php_version() {
 
 # 安装宝塔可自动处理的扩展
 install_bt_auto_extensions() {
-    log_info "处理宝塔环境可自动安装的扩展..."
-    
-    # 定义宝塔需要手工安装的扩展
-    local manual_extensions=("calendar" "fileinfo" "mbstring" "redis")
-    
-    # 获取所有必需扩展中可自动处理的扩展
-    local auto_extensions=()
-    for ext in "${REQUIRED_EXTENSIONS[@]}"; do
-        local is_manual=false
-        for manual_ext in "${manual_extensions[@]}"; do
-            if [ "$ext" = "$manual_ext" ]; then
-                is_manual=true
-                break
-            fi
-        done
-        if [ "$is_manual" = false ]; then
-            auto_extensions+=("$ext")
-        fi
-    done
-    
-    log_info "检查可自动安装的扩展: ${auto_extensions[*]}"
-    
-    # 检查这些扩展的安装情况
-    local missing_auto=()
-    for ext in "${auto_extensions[@]}"; do
-        if ! $PHP_CMD -m 2>/dev/null | grep -qi "^$ext$"; then
-            missing_auto+=("$ext")
-        fi
-    done
-    
-    if [ ${#missing_auto[@]} -gt 0 ]; then
-        log_warning "以下扩展在宝塔环境下通常是默认安装的，但检测为未安装:"
-        log_warning "${missing_auto[*]}"
-        log_info "这些扩展通常随PHP一起安装，可能是检测问题"
-    else
-        log_success "所有可自动安装的扩展都已安装"
-    fi
+    # 静默检查，不输出信息
+    return 0
 }
 
 # 宝塔面板环境处理
 handle_bt_panel() {
-    log_warning "=== 宝塔面板环境检测到 ==="
-    log_info "正在检查宝塔面板中的 PHP 8.3+ 安装情况..."
-    
     # 选择PHP版本
     if select_bt_php_version; then
-        if [ ${#BT_PHP_VERSIONS[@]} -eq 1 ]; then
-            log_success "检测到 PHP 8.${PHP_VERSION: -1}"
-        else
-            log_success "已选择 PHP 8.${PHP_VERSION: -1}"
-        fi
-        log_info "PHP 路径: $PHP_CMD"
+        log_success "检测到 PHP 8.${PHP_VERSION: -1}"
         
-        # 1. 首先处理PHP函数问题
-        echo
-        log_info "步骤1: 检查PHP函数可用性..."
-        local functions_ok=false
-        if check_php_functions; then
-            log_success "所有必需的PHP函数已启用"
-            functions_ok=true
-        else
-            log_warning "部分PHP函数被禁用，尝试自动启用..."
-            # 尝试自动启用函数
-            if enable_bt_php_functions; then
-                # 重新检查函数是否已启用
-                if check_php_functions; then
-                    log_success "PHP函数已成功启用"
-                    functions_ok=true
-                else
-                    log_warning "自动启用后仍有部分函数未生效，可能需要手动处理"
-                    functions_ok=false
-                fi
+        # 1. 处理PHP函数
+        local functions_ok=true
+        if ! check_php_functions; then
+            # 尝试自动启用
+            if enable_bt_php_functions && check_php_functions; then
+                log_success "PHP函数已自动启用"
             else
-                log_warning "无法自动启用，需要手动在宝塔面板中配置"
                 functions_ok=false
             fi
         fi
         
-        # 2. 处理可自动安装的扩展
-        echo
-        log_info "步骤2: 处理可自动安装的扩展..."
-        install_bt_auto_extensions
-        
-        # 3. 最后检查所有扩展（包括需要手工安装的）
-        echo
-        log_info "步骤3: 检查所有PHP扩展（包括需要手工安装的）..."
+        # 2. 检查扩展
         local missing_manual_extensions=()
         local manual_extensions=("calendar" "fileinfo" "mbstring" "redis")
         
@@ -661,61 +560,21 @@ handle_bt_panel() {
             fi
         done
         
-        # 4. 完整的安装流程执行完毕，现在给出总结和提示
-        echo
-        log_info "=== 宝塔环境安装流程完成 ==="
-        
+        # 3. 输出结果
         if [ "$functions_ok" = true ] && [ ${#missing_manual_extensions[@]} -eq 0 ]; then
-            log_success "所有检查都已通过！"
+            log_success "PHP环境检查通过"
             return 0
         fi
         
-        # 如果还有未完成的项目，给出统一提示
+        # 有问题才提示
         echo
-        log_warning "=== 需要在宝塔面板中手工完成的配置 ==="
-        
         if [ "$functions_ok" = false ]; then
-            log_warning "1. 【PHP函数启用 - 需要修改两个配置文件】"
-            log_warning "   宝塔面板中 CLI 和 FPM 的配置是分开的："
-            log_warning "   "
-            log_warning "   配置文件位置："
-            log_warning "   - FPM配置: /www/server/php/${PHP_VERSION}/etc/php.ini"
-            log_warning "   - CLI配置: /www/server/php/${PHP_VERSION}/etc/php-cli.ini"
-            log_warning "   "
-            log_warning "   修改方法："
-            log_warning "   - 在宝塔面板 -> 软件商店 -> PHP 8.${PHP_VERSION: -1}"
-            log_warning "   - 点击【设置】-> 【禁用函数】"
-            log_warning "   - 从禁用列表中移除以下函数："
-            log_warning "     exec, putenv, pcntl_signal, pcntl_alarm, proc_open"
-            log_warning "   - 注意：修改后需要重启PHP服务生效"
-            echo
+            log_warning "请在宝塔面板 -> PHP设置 -> 禁用函数中移除: exec, putenv, pcntl_signal, pcntl_alarm"
         fi
         
         if [ ${#missing_manual_extensions[@]} -gt 0 ]; then
-            log_warning "2. 【PHP扩展安装 - CLI和FPM共享】"
-            log_warning "   - 在PHP设置中点击【安装扩展】"
-            log_warning "   - 安装以下必需扩展："
-            for ext in "${missing_manual_extensions[@]}"; do
-                case $ext in
-                    "calendar") log_warning "     * calendar - 日历功能" ;;
-                    "fileinfo") log_warning "     * fileinfo - 文件类型检测" ;;
-                    "mbstring") log_warning "     * mbstring - 多字节字符串" ;;
-                    "redis") log_warning "     * redis - Redis缓存" ;;
-                esac
-            done
-            log_warning "   - 推荐安装："
-            log_warning "     * opcache - 性能优化"
-            log_warning "   - 注意：扩展安装后CLI和FPM会同时生效"
-            echo
+            log_warning "请在宝塔面板安装扩展: ${missing_manual_extensions[*]}"
         fi
-        
-        log_warning "3. 【网站PHP版本】"
-        log_warning "   - 在网站设置中选择 PHP 8.${PHP_VERSION: -1}+"
-        echo
-        
-        log_warning "提示：bcmath, ctype, curl, dom, gd, iconv, json, openssl,"
-        log_warning "     pdo, pdo_mysql, pcntl, tokenizer, xml, zip 通常已默认安装"
-        log_warning "====================================="
         
     else
         log_warning "未检测到 PHP 8.3 或更高版本"
@@ -742,8 +601,6 @@ enable_bt_php_functions() {
         return 1
     fi
     
-    log_info "尝试自动启用被禁用的PHP函数..."
-    
     local fpm_ini="/www/server/php/$PHP_VERSION/etc/php.ini"
     local cli_ini="/www/server/php/$PHP_VERSION/etc/php-cli.ini"
     local required_functions=("exec" "putenv" "pcntl_signal" "pcntl_alarm")
@@ -751,11 +608,10 @@ enable_bt_php_functions() {
     local all_functions=("${required_functions[@]}" "${optional_functions[@]}")
     local modified=false
     
-    # 处理FPM配置文件
+    # 静默处理FPM配置文件
     if [ -f "$fpm_ini" ]; then
-        log_info "处理FPM配置文件: $fpm_ini"
         # 备份配置文件
-        sudo cp "$fpm_ini" "${fpm_ini}.backup.$(date +%Y%m%d%H%M%S)"
+        sudo cp "$fpm_ini" "${fpm_ini}.backup.$(date +%Y%m%d%H%M%S)" 2>/dev/null
         
         # 获取当前禁用的函数列表
         local current_disabled=$(grep "^disable_functions" "$fpm_ini" | sed 's/disable_functions = //')
@@ -771,7 +627,6 @@ enable_bt_php_functions() {
                 for needed_func in "${all_functions[@]}"; do
                     if [ "$func" = "$needed_func" ]; then
                         keep=false
-                        log_info "  从FPM禁用列表中移除: $func"
                         modified=true
                         break
                     fi
@@ -786,16 +641,14 @@ enable_bt_php_functions() {
             done
             
             # 更新配置文件
-            sudo sed -i "s/^disable_functions = .*/disable_functions = $new_disabled/" "$fpm_ini"
-            log_success "FPM配置文件已更新"
+            sudo sed -i "s/^disable_functions = .*/disable_functions = $new_disabled/" "$fpm_ini" 2>/dev/null
         fi
     fi
     
-    # 处理CLI配置文件
+    # 静默处理CLI配置文件
     if [ -f "$cli_ini" ]; then
-        log_info "处理CLI配置文件: $cli_ini"
         # 备份配置文件
-        sudo cp "$cli_ini" "${cli_ini}.backup.$(date +%Y%m%d%H%M%S)"
+        sudo cp "$cli_ini" "${cli_ini}.backup.$(date +%Y%m%d%H%M%S)" 2>/dev/null
         
         # 获取当前禁用的函数列表
         local current_disabled=$(grep "^disable_functions" "$cli_ini" | sed 's/disable_functions = //')
@@ -811,7 +664,6 @@ enable_bt_php_functions() {
                 for needed_func in "${all_functions[@]}"; do
                     if [ "$func" = "$needed_func" ]; then
                         keep=false
-                        log_info "  从CLI禁用列表中移除: $func"
                         modified=true
                         break
                     fi
@@ -826,21 +678,18 @@ enable_bt_php_functions() {
             done
             
             # 更新配置文件
-            sudo sed -i "s/^disable_functions = .*/disable_functions = $new_disabled/" "$cli_ini"
-            log_success "CLI配置文件已更新"
+            sudo sed -i "s/^disable_functions = .*/disable_functions = $new_disabled/" "$cli_ini" 2>/dev/null
         fi
     fi
     
     if [ "$modified" = true ]; then
-        log_info "重启PHP-FPM服务..."
+        # 静默重启PHP服务
         sudo systemctl restart php${PHP_VERSION: -2}-fpm 2>/dev/null || \
         sudo /etc/init.d/php-fpm-${PHP_VERSION} restart 2>/dev/null || \
-        sudo pkill -f "php-fpm.*php/$PHP_VERSION" && sudo /www/server/php/$PHP_VERSION/sbin/php-fpm
+        sudo pkill -f "php-fpm.*php/$PHP_VERSION" 2>/dev/null && sudo /www/server/php/$PHP_VERSION/sbin/php-fpm 2>/dev/null
         
-        log_success "PHP函数已启用，配置已生效"
         return 0
     else
-        log_info "没有需要修改的配置"
         return 1
     fi
 }
