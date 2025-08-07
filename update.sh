@@ -107,7 +107,7 @@ pull_latest_code() {
     fi
     
     # 读取版本信息
-    NEW_VERSION=$(cat VERSION 2>/dev/null || echo "unknown")
+    NEW_VERSION=$(jq -r '.version' info.json 2>/dev/null || echo "unknown")
     log_success "新版本: $NEW_VERSION"
     
     cd "$SCRIPT_DIR"
@@ -122,8 +122,8 @@ backup_current() {
     mkdir -p "$BACKUP_PATH"
     
     # 记录当前版本
-    if [ -f "$SITE_ROOT/VERSION" ]; then
-        CURRENT_VERSION=$(cat "$SITE_ROOT/VERSION")
+    if [ -f "$SITE_ROOT/info.json" ]; then
+        CURRENT_VERSION=$(jq -r '.version' "$SITE_ROOT/info.json" 2>/dev/null || echo "unknown")
         echo "原版本: $CURRENT_VERSION" > "$BACKUP_PATH/backup_info.txt"
     fi
     
@@ -252,9 +252,8 @@ deploy_new_files() {
                 fi
             done
             
-            # 复制版本文件
-            cp "$SOURCE_PATH/VERSION" "$SITE_ROOT/" 2>/dev/null || true
-            cp "$SOURCE_PATH/BUILD_INFO.json" "$SITE_ROOT/" 2>/dev/null || true
+            # 复制构建信息文件
+            cp "$SOURCE_PATH/info.json" "$SITE_ROOT/" 2>/dev/null || true
             ;;
             
         api)

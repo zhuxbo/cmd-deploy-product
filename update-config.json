@@ -13,7 +13,8 @@
       "user": [
         "platform-config.json",
         "logo.svg",
-        "qrcode.png"
+        "qrcode.png",
+        "favicon.ico"
       ],
       "easy": [
         "config.json"

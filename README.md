@@ -147,8 +147,7 @@ site-root/               # 站点根目录
 ├── backup/              # 备份目录
 │   ├── keeper/          # keeper.sh 的备份
 │   └── update/          # install.sh 和 update.sh 的备份
-├── VERSION              # 当前版本号
-└── BUILD_INFO.json      # 构建信息
+└── info.json            # 构建信息（包含版本）
 ```
 
 ## 典型部署流程
@@ -189,7 +188,7 @@ cd /path/to/your-site/deploy
 ./keeper.sh backup
 
 # 查看版本
-cat ../VERSION
+jq -r '.version' ../info.json
 
 # 查看备份列表
 ./keeper.sh list

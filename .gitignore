@@ -10,9 +10,8 @@ backup/
 # 配置文件
 .env
 
-# 版本文件
-VERSION
-BUILD_INFO.json
+# 构建信息文件
+info.json
 
 # 日志文件
 *.log

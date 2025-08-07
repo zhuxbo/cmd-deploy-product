@@ -65,8 +65,8 @@ pull_production_code() {
     fi
     
     # 读取版本信息
-    if [ -f "VERSION" ]; then
-        VERSION=$(cat VERSION)
+    if [ -f "info.json" ]; then
+        VERSION=$(jq -r '.version' info.json 2>/dev/null || echo "unknown")
         log_success "生产代码版本: $VERSION"
     fi
     
@@ -139,13 +139,9 @@ deploy_files() {
         fi
     done
     
-    # 复制版本文件
-    if [ -f "$SOURCE_PATH/VERSION" ]; then
-        cp "$SOURCE_PATH/VERSION" "$SITE_ROOT/"
-    fi
-    
-    if [ -f "$SOURCE_PATH/BUILD_INFO.json" ]; then
-        cp "$SOURCE_PATH/BUILD_INFO.json" "$SITE_ROOT/"
+    # 复制构建信息文件
+    if [ -f "$SOURCE_PATH/info.json" ]; then
+        cp "$SOURCE_PATH/info.json" "$SITE_ROOT/"
     fi
     
     log_success "文件部署完成"

@@ -174,8 +174,7 @@ FORCE_UPDATE=1 ./update.sh
 ├── nginx/             # Nginx 配置
 ├── backup/            # 备份目录
 ├── source/            # 源码缓存
-├── VERSION            # 当前版本
-└── BUILD_INFO.json    # 构建信息
+└── info.json          # 构建信息（包含版本）
 ```
 
 ## 关键技术处理
