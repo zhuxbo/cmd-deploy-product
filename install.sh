@@ -330,8 +330,13 @@ main() {
     # 显示后续步骤
     echo
     log_warning "后续步骤："
-    log_warning "访问安装向导: http://your-domain/api/install.php"
-    log_warning "（安装向导将自动处理数据库配置、迁移和初始化等所有安装步骤）"
+    log_warning "1. Nginx 配置【重要】："
+    log_warning "   - 进入网站设置 -> 配置文件"
+    log_warning "   - 注释掉或删除现有的 root 配置行"
+    log_warning "   - 在 下一行 添加：include $SITE_ROOT/nginx/manager.conf;"
+    log_warning "   - 保存并重载配置"
+    log_warning "2. 访问安装向导: http://your-domain/api/install.php"
+    log_warning "（安装向导将自动处理数据库配置、迁移和初始化等其他安装步骤）"
     
     # 询问是否执行依赖安装
     echo
@@ -348,10 +353,10 @@ main() {
             log_warning "依赖安装脚本不存在: $DEPS_SCRIPT"
             log_info "请手动安装以下依赖："
             log_info "- PHP 8.3+ 及相关扩展"
-            log_info "- Nginx Web 服务器"
-            log_info "- MySQL 8.0+ 数据库"
-            log_info "- Redis 缓存服务"
-            log_info "- Supervisor 队列管理器"
+            log_info "- Nginx 1.8+ Web 服务器"
+            log_info "- MySQL 5.7+ 数据库"
+            log_info "- Redis 6.0+ 缓存服务"
+            log_info "- Supervisor 任务管理器"
         fi
     else
         log_info "跳过依赖安装，请确保已安装必需的运行环境"
@@ -363,18 +368,16 @@ main() {
         log_warning "=== 宝塔面板特殊配置提示 ==="
         log_warning "请在宝塔面板中手动完成以下配置："
         echo
-        log_warning "1. Nginx 配置【重要】："
-        log_warning "   - 进入网站设置 -> 配置文件"
-        log_warning "   - 注释掉或删除现有的 root 配置行"
-        log_warning "   - 在 下一行 添加：include $SITE_ROOT/nginx/manager.conf;"
-        log_warning "   - 保存并重载配置"
+        log_warning "1. 定时任务："
+        log_warning "   任务类型 Shell脚本"
+        log_warning "   执行周期 1分钟"
+        log_warning "   执行用户 www"
+        log_warning "   脚本内容 cd $SITE_ROOT/backend && php artisan schedule:run"
         echo
-        log_warning "2. 定时任务（每分钟）："
-        SITE_NAME=$(basename "$SITE_ROOT")
-        log_warning "   cd $SITE_ROOT/backend && php artisan schedule:run"
-        echo
-        log_warning "3. 队列守护进程："
-        log_warning "   php artisan queue:work --queue Task"
+        log_warning "2. 队列守护进程："
+        log_warning "   启动用户 www"
+        log_warning "   启动命令 php artisan queue:work --queue Task"
+        log_warning "   进程目录 $SITE_ROOT/backend"
         log_warning "========================="
     fi
 }
