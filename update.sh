@@ -292,14 +292,18 @@ optimize_backend() {
             PHP_CMD="/www/server/php/83/bin/php"
         fi
         
-        # 优化 Composer 自动加载
+        # 优化 Composer 自动加载（使用站点所有者执行）
         if command -v composer &> /dev/null; then
             log_info "优化 Composer 自动加载..."
-            composer dump-autoload --optimize --no-dev
+            # 获取站点所有者
+            SITE_OWNER=$(stat -c "%U" "$SITE_ROOT")
+            sudo -u "$SITE_OWNER" composer dump-autoload --optimize --no-dev
+            log_info "Composer优化已包含包发现功能"
+        else
+            # 如果没有Composer，单独执行包发现
+            log_info "运行包发现..."
+            $PHP_CMD artisan package:discover --ansi
         fi
-        
-        # 运行包发现
-        $PHP_CMD artisan package:discover --ansi
         
         # 清理并优化 Laravel 缓存
         log_info "清理并优化 Laravel 缓存..."
