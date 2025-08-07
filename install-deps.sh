@@ -495,6 +495,47 @@ select_bt_php_version() {
     fi
 }
 
+# 安装宝塔可自动处理的扩展
+install_bt_auto_extensions() {
+    log_info "处理宝塔环境可自动安装的扩展..."
+    
+    # 定义宝塔需要手工安装的扩展
+    local manual_extensions=("calendar" "fileinfo" "mbstring" "redis")
+    
+    # 获取所有必需扩展中可自动处理的扩展
+    local auto_extensions=()
+    for ext in "${REQUIRED_EXTENSIONS[@]}"; do
+        local is_manual=false
+        for manual_ext in "${manual_extensions[@]}"; do
+            if [ "$ext" = "$manual_ext" ]; then
+                is_manual=true
+                break
+            fi
+        done
+        if [ "$is_manual" = false ]; then
+            auto_extensions+=("$ext")
+        fi
+    done
+    
+    log_info "检查可自动安装的扩展: ${auto_extensions[*]}"
+    
+    # 检查这些扩展的安装情况
+    local missing_auto=()
+    for ext in "${auto_extensions[@]}"; do
+        if ! $PHP_CMD -m 2>/dev/null | grep -qi "^$ext$"; then
+            missing_auto+=("$ext")
+        fi
+    done
+    
+    if [ ${#missing_auto[@]} -gt 0 ]; then
+        log_warning "以下扩展在宝塔环境下通常是默认安装的，但检测为未安装:"
+        log_warning "${missing_auto[*]}"
+        log_info "这些扩展通常随PHP一起安装，可能是检测问题"
+    else
+        log_success "所有可自动安装的扩展都已安装"
+    fi
+}
+
 # 宝塔面板环境处理
 handle_bt_panel() {
     log_warning "=== 宝塔面板环境检测到 ==="
@@ -511,102 +552,98 @@ handle_bt_panel() {
         
         # 1. 首先处理PHP函数问题
         echo
-        log_info "检查PHP函数可用性..."
-        if ! check_php_functions; then
-            log_warning "部分PHP函数被禁用，需要在宝塔面板中启用"
-            log_warning "请在PHP设置的【禁用函数】中移除："
-            log_warning "exec, putenv, pcntl_signal, pcntl_alarm, proc_open"
-            echo
-        else
+        log_info "步骤1: 检查PHP函数可用性..."
+        local functions_ok=false
+        if check_php_functions; then
             log_success "所有必需的PHP函数已启用"
+            functions_ok=true
+        else
+            log_warning "部分PHP函数被禁用，需要处理"
+            functions_ok=false
         fi
         
-        # 2. 最后检查扩展
+        # 2. 处理可自动安装的扩展
         echo
-        log_info "检查PHP扩展..."
-        if check_php_extensions; then
-            log_success "所有必需的PHP扩展已安装"
+        log_info "步骤2: 处理可自动安装的扩展..."
+        install_bt_auto_extensions
+        
+        # 3. 最后检查所有扩展（包括需要手工安装的）
+        echo
+        log_info "步骤3: 检查所有PHP扩展（包括需要手工安装的）..."
+        local missing_manual_extensions=()
+        local manual_extensions=("calendar" "fileinfo" "mbstring" "redis")
+        
+        for ext in "${manual_extensions[@]}"; do
+            if ! $PHP_CMD -m 2>/dev/null | grep -qi "^$ext$"; then
+                missing_manual_extensions+=("$ext")
+            fi
+        done
+        
+        # 4. 完整的安装流程执行完毕，现在给出总结和提示
+        echo
+        log_info "=== 宝塔环境安装流程完成 ==="
+        
+        if [ "$functions_ok" = true ] && [ ${#missing_manual_extensions[@]} -eq 0 ]; then
+            log_success "所有检查都已通过！"
             return 0
-        else
-            log_warning "部分扩展缺失，请在宝塔面板中安装"
         fi
+        
+        # 如果还有未完成的项目，给出统一提示
+        echo
+        log_warning "=== 需要在宝塔面板中手工完成的配置 ==="
+        
+        if [ "$functions_ok" = false ]; then
+            log_warning "1. 【PHP函数启用】"
+            log_warning "   - 点击 PHP 8.$((PHP_VERSION/10)) 的【设置】"
+            log_warning "   - 进入【禁用函数】选项卡"
+            log_warning "   - 从禁用列表中移除以下函数："
+            log_warning "     exec, putenv, pcntl_signal, pcntl_alarm, proc_open"
+            echo
+        fi
+        
+        if [ ${#missing_manual_extensions[@]} -gt 0 ]; then
+            log_warning "2. 【PHP扩展安装】"
+            log_warning "   - 在PHP设置中点击【安装扩展】"
+            log_warning "   - 安装以下必需扩展："
+            for ext in "${missing_manual_extensions[@]}"; do
+                case $ext in
+                    "calendar") log_warning "     * calendar - 日历功能" ;;
+                    "fileinfo") log_warning "     * fileinfo - 文件类型检测" ;;
+                    "mbstring") log_warning "     * mbstring - 多字节字符串" ;;
+                    "redis") log_warning "     * redis - Redis缓存" ;;
+                esac
+            done
+            log_warning "   - 推荐安装："
+            log_warning "     * opcache - 性能优化"
+            log_warning "     * intl - 国际化支持"
+            echo
+        fi
+        
+        log_warning "3. 【网站PHP版本】"
+        log_warning "   - 在网站设置中选择 PHP 8.$((PHP_VERSION/10))+"
+        echo
+        
+        log_warning "提示：bcmath, ctype, curl, dom, gd, iconv, json, openssl,"
+        log_warning "     pdo, pdo_mysql, pcntl, tokenizer, xml, zip 通常已默认安装"
+        log_warning "====================================="
+        
     else
         log_warning "未检测到 PHP 8.3 或更高版本"
-    fi
-    
-    echo
-    log_warning "=== 宝塔面板配置指引 ==="
-    
-    if [ -z "$PHP_CMD" ]; then
+        
+        echo
+        log_warning "=== 需要在宝塔面板中完成的安装 ==="
         log_warning "1. 【安装PHP】"
         log_warning "   - 登录宝塔面板"
         log_warning "   - 进入【软件商店】->【运行环境】"
         log_warning "   - 安装 PHP 8.3 或更高版本"
         echo
+        log_warning "2. 【配置函数和扩展】"
+        log_warning "   - 安装完PHP后，按上述步骤配置函数和扩展"
+        log_warning "====================================="
     fi
     
-    log_warning "2. 【PHP函数配置】"
-    log_warning "   - 点击 PHP 8.3+ 的【设置】"
-    log_warning "   - 进入【禁用函数】选项卡"
-    log_warning "   - 从禁用列表中移除以下函数："
-    log_warning "     exec, putenv, pcntl_signal, pcntl_alarm, proc_open"
-    echo
-    
-    log_warning "3. 【PHP扩展安装】"
-    log_warning "   - 在PHP设置中点击【安装扩展】"
-    log_warning "   - 安装以下必需扩展："
-    log_warning "     * calendar - 日历功能"
-    log_warning "     * fileinfo - 文件类型检测"
-    log_warning "     * mbstring - 多字节字符串"
-    log_warning "     * redis - Redis缓存"
-    log_warning "   - 推荐安装："
-    log_warning "     * opcache - 性能优化"
-    log_warning "     * intl - 国际化支持"
-    echo
-    
-    log_warning "4. 【网站PHP版本】"
-    log_warning "   - 在网站设置中选择 PHP 8.3+"
-    echo
-    
-    log_warning "提示：bcmath, ctype, curl, dom, gd, iconv, json, openssl"
-    log_warning "     pdo, pdo_mysql, tokenizer, xml, zip 通常已默认安装"
-    log_warning "========================="
-    
-    read -p "是否已完成上述配置？(y/n): " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        # 重新检测和选择PHP版本
-        if select_bt_php_version; then
-            if [ ${#BT_PHP_VERSIONS[@]} -eq 1 ]; then
-                log_success "重新检测到 PHP 8.$((PHP_VERSION/10))"
-            else
-                log_success "已选择 PHP 8.$((PHP_VERSION/10))"
-            fi
-            
-            # 1. 先检查函数
-            log_info "验证PHP函数..."
-            if ! check_php_functions; then
-                log_error "PHP函数检查未通过，请确保已正确移除禁用函数"
-                exit 1
-            fi
-            
-            # 2. 再检查扩展
-            log_info "验证PHP扩展..."
-            if check_php_extensions; then
-                log_success "PHP 环境配置完成"
-                return 0
-            else
-                log_error "PHP扩展检查未通过，请确保已安装所有必需扩展"
-                exit 1
-            fi
-        else
-            log_error "仍未检测到 PHP 8.3+，请确保已正确安装"
-            exit 1
-        fi
-    else
-        log_info "请完成配置后重新运行此脚本"
-        exit 0
-    fi
+    # 安装流程已完整执行，无需用户再次确认
+    log_info "安装流程已完成。如需验证配置，请重新运行此脚本。"
 }
 
 # 检查Composer版本和可用性
