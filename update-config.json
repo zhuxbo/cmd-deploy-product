@@ -1,0 +1,37 @@
+{
+  "preserve_files": {
+    "backend": [
+      ".env",
+      "storage/app/public",
+      "storage/logs"
+    ],
+    "frontend": {
+      "admin": [
+        "platform-config.json",
+        "logo.svg"
+      ],
+      "user": [
+        "platform-config.json",
+        "logo.svg",
+        "qrcode.png"
+      ],
+      "easy": [
+        "config.json"
+      ]
+    }
+  },
+  "services": {
+    "nginx": {
+      "reload_command": "sudo systemctl reload nginx",
+      "status_command": "systemctl is-active nginx"
+    },
+    "php-fpm": {
+      "restart_command": "sudo systemctl restart php*-fpm",
+      "status_command": "systemctl is-active php*-fpm"
+    },
+    "queue": {
+      "restart_command": "sudo supervisorctl restart laravel-worker-{SITE_NAME}:*",
+      "status_command": "sudo supervisorctl status laravel-worker-{SITE_NAME}:*"
+    }
+  }
+}

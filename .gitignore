@@ -8,7 +8,6 @@ source/
 backup/
 
 # 配置文件
-update-config.json
 .env
 
 # 版本文件
