@@ -298,11 +298,9 @@ optimize_backend() {
             # 获取站点所有者
             SITE_OWNER=$(stat -c "%U" "$SITE_ROOT")
             sudo -u "$SITE_OWNER" composer dump-autoload --optimize --no-dev
-            log_info "Composer优化已包含包发现功能"
+            log_info "已完成自动加载优化（包发现已通过post-autoload-dump自动执行）"
         else
-            # 如果没有Composer，单独执行包发现
-            log_info "运行包发现..."
-            $PHP_CMD artisan package:discover --ansi
+            log_warning "Composer 未安装，跳过自动加载优化"
         fi
         
         # 清理并优化 Laravel 缓存
