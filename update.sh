@@ -501,8 +501,17 @@ set_permissions() {
     if [ -d "$SITE_ROOT/backend" ] && ([ "$UPDATE_MODULE" = "all" ] || [ "$UPDATE_MODULE" = "api" ]); then
         log_info "设置后端目录权限..."
         
-        # 整体设置所有者（快速操作）
-        sudo chown -R "$SITE_OWNER:$SITE_GROUP" "$SITE_ROOT/backend" 2>/dev/null
+        # 整体设置所有者（显示错误信息）
+        if ! sudo chown -R "$SITE_OWNER:$SITE_GROUP" "$SITE_ROOT/backend"; then
+            log_error "设置后端目录所有者失败"
+            log_info "尝试分步设置权限..."
+            # 先设置目录
+            find "$SITE_ROOT/backend" -type d -exec sudo chown "$SITE_OWNER:$SITE_GROUP" {} \;
+            # 再设置文件
+            find "$SITE_ROOT/backend" -type f -exec sudo chown "$SITE_OWNER:$SITE_GROUP" {} \;
+        else
+            log_success "后端目录所有者设置成功: $SITE_OWNER:$SITE_GROUP"
+        fi
         
         # 设置基础目录权限为755
         sudo chmod 755 "$SITE_ROOT/backend" 2>/dev/null
@@ -537,14 +546,22 @@ set_permissions() {
         if [ "$UPDATE_MODULE" = "all" ]; then
             # 批量处理所有前端
             log_info "设置前端权限..."
-            sudo chown -R "$SITE_OWNER:$SITE_GROUP" "$SITE_ROOT/frontend" 2>/dev/null
+            if ! sudo chown -R "$SITE_OWNER:$SITE_GROUP" "$SITE_ROOT/frontend"; then
+                log_error "设置前端目录所有者失败"
+            else
+                log_success "前端目录所有者设置成功: $SITE_OWNER:$SITE_GROUP"
+            fi
             find "$SITE_ROOT/frontend" -type d -exec sudo chmod 755 {} + 2>/dev/null
             find "$SITE_ROOT/frontend" -type f -exec sudo chmod 644 {} + 2>/dev/null
         else
             # 单个前端组件
             if [ -d "$SITE_ROOT/frontend/$UPDATE_MODULE" ]; then
                 log_info "设置 $UPDATE_MODULE 前端权限..."
-                sudo chown -R "$SITE_OWNER:$SITE_GROUP" "$SITE_ROOT/frontend/$UPDATE_MODULE" 2>/dev/null
+                if ! sudo chown -R "$SITE_OWNER:$SITE_GROUP" "$SITE_ROOT/frontend/$UPDATE_MODULE"; then
+                    log_error "设置 $UPDATE_MODULE 前端目录所有者失败"
+                else
+                    log_success "$UPDATE_MODULE 前端目录所有者设置成功: $SITE_OWNER:$SITE_GROUP"
+                fi
                 find "$SITE_ROOT/frontend/$UPDATE_MODULE" -type d -exec sudo chmod 755 {} + 2>/dev/null
                 find "$SITE_ROOT/frontend/$UPDATE_MODULE" -type f -exec sudo chmod 644 {} + 2>/dev/null
             fi
@@ -554,12 +571,48 @@ set_permissions() {
     # 设置nginx目录权限
     if ([ "$UPDATE_MODULE" = "all" ] || [ "$UPDATE_MODULE" = "nginx" ]) && [ -d "$SITE_ROOT/nginx" ]; then
         log_info "设置nginx目录权限..."
-        sudo chown -R "$SITE_OWNER:$SITE_GROUP" "$SITE_ROOT/nginx" 2>/dev/null
+        if ! sudo chown -R "$SITE_OWNER:$SITE_GROUP" "$SITE_ROOT/nginx"; then
+            log_error "设置nginx目录所有者失败"
+        else
+            log_success "nginx目录所有者设置成功: $SITE_OWNER:$SITE_GROUP"
+        fi
         sudo chmod -R 755 "$SITE_ROOT/nginx" 2>/dev/null
         find "$SITE_ROOT/nginx" -type f -exec sudo chmod 644 {} + 2>/dev/null
     fi
     
-    log_success "权限设置完成（所有者: $SITE_OWNER:$SITE_GROUP）"
+    # 验证权限设置结果
+    log_info "验证权限设置结果..."
+    VERIFY_FAILED=0
+    
+    if [ -d "$SITE_ROOT/backend" ] && ([ "$UPDATE_MODULE" = "all" ] || [ "$UPDATE_MODULE" = "api" ]); then
+        ACTUAL_OWNER=$(stat -c "%U" "$SITE_ROOT/backend")
+        ACTUAL_GROUP=$(stat -c "%G" "$SITE_ROOT/backend")
+        if [ "$ACTUAL_OWNER" = "$SITE_OWNER" ] && [ "$ACTUAL_GROUP" = "$SITE_GROUP" ]; then
+            log_success "✓ 后端目录权限验证通过: $ACTUAL_OWNER:$ACTUAL_GROUP"
+        else
+            log_error "✗ 后端目录权限验证失败: 实际 $ACTUAL_OWNER:$ACTUAL_GROUP, 期望 $SITE_OWNER:$SITE_GROUP"
+            VERIFY_FAILED=1
+        fi
+        
+        # 检查重要文件的权限
+        if [ -f "$SITE_ROOT/backend/.env" ]; then
+            ENV_OWNER=$(stat -c "%U" "$SITE_ROOT/backend/.env")
+            if [ "$ENV_OWNER" = "$SITE_OWNER" ]; then
+                log_success "✓ .env文件权限正确: $ENV_OWNER"
+            else
+                log_error "✗ .env文件权限错误: $ENV_OWNER (期望 $SITE_OWNER)"
+                VERIFY_FAILED=1
+            fi
+        fi
+    fi
+    
+    if [ $VERIFY_FAILED -eq 0 ]; then
+        log_success "权限设置完成并验证通过（所有者: $SITE_OWNER:$SITE_GROUP）"
+    else
+        log_warning "权限设置完成但验证有错误（目标所有者: $SITE_OWNER:$SITE_GROUP）"
+        log_warning "请手动检查文件权限或使用以下命令修复："
+        log_warning "sudo chown -R $SITE_OWNER:$SITE_GROUP $SITE_ROOT"
+    fi
 }
 
 # 重载服务
@@ -677,14 +730,14 @@ main() {
     # 恢复保留的文件
     restore_preserve_files
     
-    # 执行后端优化
-    optimize_backend
-    
     # 更新 Nginx 配置路径
     update_nginx_config
     
-    # 设置权限
+    # 设置权限（必须在后端优化之前）
     set_permissions
+    
+    # 执行后端优化（在权限设置之后）
+    optimize_backend
     
     # 重载服务
     reload_services
