@@ -45,8 +45,8 @@ diagnose_php_extension_issues() {
     fi
     
     local bt_php="/www/server/php/$PHP_VERSION/bin/php"
-    local expected_version="${PHP_VERSION:0:1}.${PHP_VERSION:1:1}"
     local has_composer_issue=false
+    local minimum_php_version="8.3"
     
     echo
     log_info "=== 步骤1: 检测系统PHP冲突 ==="
@@ -63,12 +63,12 @@ diagnose_php_extension_issues() {
                 local php_version=$(timeout 3s /usr/bin/php -r "echo PHP_VERSION;" 2>/dev/null || echo "unknown")
                 log_info "  /usr/bin/php 指向宝塔PHP: $php_version"
                 
-                # 检查版本是否匹配
-                if echo "$php_version" | grep -q "^$expected_version"; then
-                    log_success "  ✓ PHP版本匹配项目需求 ($expected_version)"
+                # 检查版本是否满足最低要求
+                if [ "$php_version" != "unknown" ] && version_compare "$php_version" "$minimum_php_version"; then
+                    log_success "  ✓ PHP版本满足要求 (>= $minimum_php_version)"
                 else
-                    log_warning "  ! PHP版本不匹配，当前: $php_version，需要: $expected_version"
-                    log_info "  需要修复 /usr/bin/php 指向正确的宝塔PHP版本"
+                    log_warning "  ! PHP版本过低，当前: $php_version，最低需要: $minimum_php_version"
+                    log_info "  建议通过宝塔面板升级到更高版本的PHP"
                     system_phps+=("/usr/bin/php")
                 fi
             else
@@ -108,7 +108,7 @@ diagnose_php_extension_issues() {
         log_success "  ✓ 未发现冲突的系统PHP"
     else
         log_warning "  ! 发现 ${#system_phps[@]} 个系统PHP，可能影响Composer"
-        has_composer_issue=true
+        # 注意：这里先不设置has_composer_issue=true，等Composer实际检测后再判断
     fi
     
     echo
@@ -143,11 +143,13 @@ diagnose_php_extension_issues() {
         fi
         
         if [ -n "$composer_php_version" ]; then
-            if echo "$composer_php_version" | grep -q "$expected_version"; then
-                log_success "    ✓ PHP版本匹配宝塔PHP $expected_version"
+            # 提取版本号进行比较
+            local composer_version=$(echo "$composer_php_version" | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' | head -1)
+            if [ -n "$composer_version" ] && version_compare "$composer_version" "$minimum_php_version"; then
+                log_success "    ✓ Composer使用的PHP版本满足要求 (>= $minimum_php_version)"
                 composer_php_match=true
             else
-                log_error "    ✗ PHP版本不匹配，预期: PHP $expected_version，实际: $composer_php_version"
+                log_error "    ✗ Composer使用的PHP版本过低，最低需要: $minimum_php_version，实际: $composer_php_version"
                 has_composer_issue=true
             fi
         else
@@ -173,13 +175,22 @@ diagnose_php_extension_issues() {
     local default_php_path=""
     if command -v php >/dev/null 2>&1; then
         default_php_path=$(which php)
-        if [[ "$default_php_path" == *"/www/server/php"* ]]; then
-            log_success "    ✓ 系统默认PHP已设置为宝塔PHP"
-            log_info "    路径: $default_php_path"
+        local default_php_version=""
+        if default_php_version=$(timeout 3s php -r "echo PHP_VERSION;" 2>/dev/null); then
+            if [[ "$default_php_path" == *"/www/server/php"* ]]; then
+                if version_compare "$default_php_version" "$minimum_php_version"; then
+                    log_success "    ✓ 系统默认PHP配置正确"
+                    log_info "    路径: $default_php_path，版本: $default_php_version"
+                else
+                    log_warning "    ! 系统默认PHP版本过低"
+                    log_info "    路径: $default_php_path，版本: $default_php_version，需要: >= $minimum_php_version"
+                fi
+            else
+                log_warning "    ! 系统默认PHP不是宝塔PHP"
+                log_info "    当前路径: $default_php_path，版本: $default_php_version"
+            fi
         else
-            log_warning "    ! 系统默认PHP不是宝塔PHP"
-            log_info "    当前路径: $default_php_path"
-            log_info "    建议通过宝塔面板设置默认PHP CLI版本"
+            log_warning "    ! 无法获取系统默认PHP版本"
         fi
     else
         log_warning "    ! 未找到系统默认php命令"
@@ -249,8 +260,9 @@ diagnose_php_extension_issues() {
         
         if [ ${#missing_critical[@]} -eq 0 ]; then
             log_success "  ✓ 所有必需扩展都能被Composer检测到 (${#required_extensions[@]}/${#required_extensions[@]})"
-            if [ "$composer_php_match" = true ]; then
+            if [ "$composer_php_match" = true ] || [ ${#system_phps[@]} -eq 0 ]; then
                 log_success "  ✓ Composer配置完全正常，无需修复！"
+                has_composer_issue=false  # 确保标记为正常
                 return 0
             fi
         else
@@ -286,7 +298,7 @@ diagnose_php_extension_issues() {
         if [ ${#system_phps[@]} -gt 0 ]; then
             log_warning "问题原因分析："
             log_warning "- 系统安装了冲突的PHP: ${system_phps[*]}"
-            log_warning "- Composer可能使用系统PHP而非宝塔PHP $expected_version"
+            log_warning "- Composer可能使用系统PHP而非宝塔PHP (需要>= $minimum_php_version)"
             if [ "$platform_success" = false ]; then
                 log_warning "- 导致Composer无法正确检测扩展"
             else
@@ -314,8 +326,8 @@ diagnose_php_extension_issues() {
             fi
             
             if [ "$needs_php_link_fix" = true ]; then
-                echo "2. 修复 /usr/bin/php 指向正确的宝塔PHP版本"
-                echo "   当前 /usr/bin/php 版本不匹配，需要指向PHP $expected_version"
+                echo "2. 修复 /usr/bin/php 配置问题"
+                echo "   当前 /usr/bin/php 版本过低或指向错误，需要>= PHP $minimum_php_version"
             fi
             
             # 如果两个问题都不存在，说明可能还有其他问题
@@ -373,7 +385,7 @@ diagnose_php_extension_issues() {
         log_error "建议: 优先解决PHP版本冲突问题"
     else
         log_success "诊断结论: Composer配置完全正常"
-        log_success "PHP版本: 匹配宝塔PHP $expected_version"
+        log_success "PHP版本: 满足最低要求 (>= $minimum_php_version)"
         log_success "扩展检测: 所有 $([ -n "${required_extensions:-}" ] && echo "${#required_extensions[@]}" || echo "必需") 个扩展正常检测"
     fi
 }
@@ -1515,46 +1527,40 @@ fix_bt_composer_php() {
     fi
     
     local bt_php="/www/server/php/$PHP_VERSION/bin/php"
-    local expected_version="${PHP_VERSION:0:1}.${PHP_VERSION:1:1}"
+    local minimum_php_version="8.3"
     
     log_info "检查PHP命令行配置..."
     
-    # 检查 /usr/bin/php 是否存在
+    # 检查 /usr/bin/php 是否存在且可用
     if [ ! -e "/usr/bin/php" ]; then
-        log_warning "/usr/bin/php 不存在，需要创建"
+        log_info "/usr/bin/php 不存在，创建指向宝塔PHP的链接"
     else
-        # 检查是否是软链接
-        if [ -L "/usr/bin/php" ]; then
-            local link_target=$(readlink -f "/usr/bin/php")
-            log_info "当前 /usr/bin/php 指向: $link_target"
-            
-            if [[ "$link_target" == *"/www/server/php"* ]]; then
-                # 获取版本号
-                if php_version=$(timeout 3s /usr/bin/php -r "echo PHP_VERSION;" 2>/dev/null); then
-                    log_success "✓ /usr/bin/php 已指向宝塔PHP: $php_version"
-                    
-                    if echo "$php_version" | grep -q "^$expected_version"; then
-                        log_success "✓ 版本匹配项目需求 ($expected_version)"
+        # 检查当前PHP是否可用
+        if php_version=$(timeout 3s /usr/bin/php -r "echo PHP_VERSION;" 2>/dev/null); then
+            # 检查是否指向宝塔PHP
+            if [ -L "/usr/bin/php" ]; then
+                local link_target=$(readlink -f "/usr/bin/php")
+                if [[ "$link_target" == *"/www/server/php"* ]]; then
+                    # 检查版本是否满足要求
+                    if version_compare "$php_version" "$minimum_php_version"; then
+                        log_success "✓ /usr/bin/php 配置正确，版本: $php_version (>= $minimum_php_version)"
                         return 0
                     else
-                        log_warning "! 版本不匹配，当前: $php_version，需要: $expected_version"
+                        log_warning "! /usr/bin/php 版本过低: $php_version，需要升级"
                     fi
+                else
+                    log_warning "! /usr/bin/php 指向系统PHP: $link_target"
                 fi
             else
-                log_warning "! /usr/bin/php 指向系统PHP而非宝塔PHP"
+                log_warning "! /usr/bin/php 是系统安装的PHP: $php_version"
             fi
         else
-            # 不是软链接，可能是系统安装的PHP
-            if php_version=$(timeout 3s /usr/bin/php -r "echo PHP_VERSION;" 2>/dev/null); then
-                log_warning "! /usr/bin/php 是系统安装的PHP: $php_version"
-            else
-                log_warning "! /usr/bin/php 存在但无法获取版本"
-            fi
+            log_warning "! /usr/bin/php 存在但无法执行"
         fi
     fi
     
-    # 自动修复：创建正确的软链接
-    log_info "正在设置 /usr/bin/php 指向宝塔PHP..."
+    # 需要修复时，创建指向当前宝塔PHP的链接
+    log_info "设置 /usr/bin/php 指向宝塔PHP $PHP_VERSION..."
     
     # 备份原文件（如果存在且不是软链接）
     if [ -f "/usr/bin/php" ] && [ ! -L "/usr/bin/php" ]; then
