@@ -49,44 +49,70 @@ diagnose_php_extension_issues() {
     local fpm_ini="/www/server/php/$PHP_VERSION/etc/php.ini"
     local problem_exts=("bcmath" "gd" "intl" "zip" "xml")
     
+    # 添加调试信息
+    log_info "调试信息:"
+    log_info "  PHP_VERSION: $PHP_VERSION"
+    log_info "  php_cli: $php_cli"
+    log_info "  cli_ini: $cli_ini"  
+    log_info "  fpm_ini: $fpm_ini"
+    
     echo
     log_info "=== Composer install 报错扩展深度分析 ==="
+    log_info "将检查 ${#problem_exts[@]} 个常见问题扩展..."
     
+    local ext_count=1
     for ext in "${problem_exts[@]}"; do
         echo
-        log_info "检查扩展: $ext"
+        log_info "[$ext_count/${#problem_exts[@]}] 检查扩展: $ext"
         
         # 1. CLI模式检查
-        log_info "  CLI模式 ($cli_ini):"
-        if PHPRC="$cli_ini" $php_cli -m 2>/dev/null | grep -qi "^$ext$"; then
-            log_success "    ✓ 扩展已加载"
-        else
-            log_error "    ✗ 扩展未加载"
+        log_info "  CLI模式检查开始..."
+        log_info "    配置文件: $cli_ini"
+        
+        # 检查PHP命令是否可执行
+        if [ ! -x "$php_cli" ]; then
+            log_error "    ✗ PHP CLI命令不可执行: $php_cli"
+            continue
         fi
         
-        # 检查扩展是否在配置中启用
-        if grep -q "extension=$ext" "$cli_ini" 2>/dev/null; then
+        # 使用超时检查扩展加载（5秒超时）
+        log_info "    检查扩展是否已加载..."
+        if timeout 5s bash -c "PHPRC='$cli_ini' '$php_cli' -m 2>/dev/null | grep -qi '^$ext$'" 2>/dev/null; then
+            log_success "    ✓ 扩展已加载"
+        else
+            log_error "    ✗ 扩展未加载或检查超时"
+        fi
+        
+        # 检查扩展是否在配置中启用（使用超时）
+        log_info "    检查配置文件启用状态..."
+        if timeout 3s grep -q "extension=$ext" "$cli_ini" 2>/dev/null; then
             log_success "    ✓ 配置中已启用 (extension=$ext)"
-        elif grep -q "extension=$ext.so" "$cli_ini" 2>/dev/null; then
+        elif timeout 3s grep -q "extension=$ext.so" "$cli_ini" 2>/dev/null; then
             log_success "    ✓ 配置中已启用 (extension=$ext.so)"
         else
-            log_warning "    ! 配置中未明确启用"
+            log_warning "    ! 配置中未明确启用或检查超时"
         fi
         
         # 2. FPM模式检查
-        log_info "  FPM模式 ($fpm_ini):"  
-        if PHPRC="$fpm_ini" $php_cli -m 2>/dev/null | grep -qi "^$ext$"; then
+        log_info "  FPM模式检查开始..."  
+        log_info "    配置文件: $fpm_ini"
+        
+        # 使用超时检查扩展加载（5秒超时）
+        log_info "    检查扩展是否已加载..."
+        if timeout 5s bash -c "PHPRC='$fpm_ini' '$php_cli' -m 2>/dev/null | grep -qi '^$ext$'" 2>/dev/null; then
             log_success "    ✓ 扩展已加载"
         else
-            log_error "    ✗ 扩展未加载"
+            log_error "    ✗ 扩展未加载或检查超时"
         fi
         
-        if grep -q "extension=$ext" "$fpm_ini" 2>/dev/null; then
+        # 检查扩展是否在配置中启用（使用超时）
+        log_info "    检查配置文件启用状态..."
+        if timeout 3s grep -q "extension=$ext" "$fpm_ini" 2>/dev/null; then
             log_success "    ✓ 配置中已启用 (extension=$ext)"
-        elif grep -q "extension=$ext.so" "$fpm_ini" 2>/dev/null; then
+        elif timeout 3s grep -q "extension=$ext.so" "$fpm_ini" 2>/dev/null; then
             log_success "    ✓ 配置中已启用 (extension=$ext.so)"
         else
-            log_warning "    ! 配置中未明确启用"
+            log_warning "    ! 配置中未明确启用或检查超时"
         fi
         
         # 3. 检查扩展文件是否存在
@@ -101,20 +127,37 @@ diagnose_php_extension_issues() {
             "/usr/lib/php/extensions"
         )
         
-        # 获取PHP实际扩展目录
-        local actual_ext_dir=$($php_cli -r "echo ini_get('extension_dir');" 2>/dev/null)
-        if [ -n "$actual_ext_dir" ] && [ "$actual_ext_dir" != "" ]; then
-            ext_dirs+=("$actual_ext_dir")
+        # 获取PHP实际扩展目录（使用超时）
+        log_info "    获取PHP扩展目录..."
+        local actual_ext_dir=""
+        if actual_ext_dir=$(timeout 5s $php_cli -r "echo ini_get('extension_dir');" 2>/dev/null); then
+            if [ -n "$actual_ext_dir" ] && [ "$actual_ext_dir" != "" ]; then
+                ext_dirs+=("$actual_ext_dir")
+                log_info "    实际扩展目录: $actual_ext_dir"
+            fi
+        else
+            log_warning "    获取扩展目录超时或失败"
         fi
         
+        # 搜索扩展文件（使用超时和更高效的搜索）
+        log_info "    搜索扩展文件..."
         for dir in "${ext_dirs[@]}"; do
+            log_info "    检查目录: $dir"
             if [ -d "$dir" ]; then
-                if find "$dir" -name "*$ext*" -type f 2>/dev/null | grep -q "$ext"; then
-                    log_success "    ✓ 扩展文件存在于 $dir"
-                    find "$dir" -name "*$ext*" -type f 2>/dev/null | sed 's/^/      /'
-                    ext_found=true
-                    break
+                # 使用更短的超时进行文件搜索，优先检查常见文件名
+                local found_files=""
+                if found_files=$(timeout 5s find "$dir" -maxdepth 2 -name "*$ext*" -type f 2>/dev/null | head -3); then
+                    if [ -n "$found_files" ]; then
+                        log_success "    ✓ 扩展文件存在于 $dir"
+                        echo "$found_files" | sed 's/^/      /'
+                        ext_found=true
+                        break
+                    fi
+                else
+                    log_info "    搜索超时，跳过此目录"
                 fi
+            else
+                log_info "    目录不存在: $dir"
             fi
         done
         
@@ -135,29 +178,48 @@ diagnose_php_extension_issues() {
                 log_warning "    ! 系统包可能未安装 (php${php_short}-$ext)"
             fi
         fi
+        
+        # 递增计数器
+        ext_count=$((ext_count + 1))
     done
     
     echo
     log_info "=== Composer环境模拟测试 ==="
     
     # 检查composer运行时PHP环境
+    log_info "开始Composer环境检查..."
     if command -v composer >/dev/null 2>&1; then
         log_info "检查composer实际使用的PHP环境:"
         
-        # 获取composer使用的PHP版本和扩展
-        local composer_php_version=$(composer --version 2>&1 | grep -o 'PHP [0-9]\+\.[0-9]\+\.[0-9]\+' | head -1)
-        log_info "  Composer使用的PHP版本: $composer_php_version"
+        # 获取composer使用的PHP版本（使用更短超时）
+        log_info "  获取Composer版本信息..."
+        local composer_php_version=""
+        if composer_php_version=$(timeout 5s composer --version 2>/dev/null | grep -o 'PHP [0-9]\+\.[0-9]\+\.[0-9]\+' | head -1 2>/dev/null); then
+            log_info "  Composer使用的PHP版本: $composer_php_version"
+        else
+            log_warning "  获取Composer版本信息超时或失败"
+            log_info "  跳过Composer扩展检测，避免长时间等待"
+            return 0
+        fi
         
-        # 测试composer能否检测到扩展
-        for ext in "${problem_exts[@]}"; do
-            # 模拟composer的扩展检查方式
-            if timeout 10s composer show --platform 2>/dev/null | grep -q "ext-$ext"; then
-                log_success "  ✓ Composer能检测到扩展: $ext"
-            else
-                log_error "  ✗ Composer无法检测到扩展: $ext"
-                log_info "    → 这可能是composer install报错的原因"
-            fi
-        done
+        # 测试composer能否检测到扩展（使用更短超时，并添加备用方案）
+        log_info "  测试Composer扩展检测..."
+        local platform_output=""
+        if platform_output=$(timeout 8s composer show --platform 2>/dev/null); then
+            for ext in "${problem_exts[@]}"; do
+                log_info "    检查扩展: $ext"
+                if echo "$platform_output" | grep -q "ext-$ext"; then
+                    log_success "    ✓ Composer能检测到扩展: $ext"
+                else
+                    log_error "    ✗ Composer无法检测到扩展: $ext"
+                    log_info "      → 这可能是composer install报错的原因"
+                fi
+            done
+        else
+            log_warning "  Composer扩展检测超时或失败"
+            log_info "  这可能是机器性能或网络问题导致的"
+            log_info "  建议手动检查: composer show --platform"
+        fi
     else
         log_warning "composer命令不可用"
     fi
@@ -1644,13 +1706,84 @@ main() {
         log_info "运行PHP扩展深度诊断模式..."
         echo
         
-        # 检测系统和PHP版本
-        detect_system >/dev/null 2>&1 || true
-        if check_bt_panel; then
-            select_bt_php_version >/dev/null 2>&1 || true
+        # 检测系统和PHP版本（使用超时和调试）
+        log_info "步骤1: 检测系统环境..."
+        if timeout 30s detect_system >/dev/null 2>&1; then
+            log_success "系统检测完成"
+        else
+            log_warning "系统检测超时或失败，继续执行..."
         fi
         
-        diagnose_php_extension_issues
+        log_info "步骤2: 检查宝塔环境..."
+        if check_bt_panel; then
+            log_success "检测到宝塔环境"
+            log_info "步骤3: 选择PHP版本..."
+            if timeout 15s select_bt_php_version >/dev/null 2>&1; then
+                log_success "PHP版本选择完成: $PHP_VERSION"
+            else
+                log_warning "PHP版本选择超时，尝试手动设置..."
+                # 手动设置默认版本
+                for ver in 85 84 83; do
+                    if [ -d "/www/server/php/$ver" ]; then
+                        PHP_VERSION="$ver"
+                        log_info "手动设置PHP版本: $PHP_VERSION"
+                        break
+                    fi
+                done
+            fi
+        else
+            log_error "未检测到宝塔环境，诊断功能需要宝塔环境"
+            exit 1
+        fi
+        
+        log_info "步骤4: 开始扩展诊断..."
+        log_info "诊断超时限制: 5分钟"
+        
+        # 使用后台进程和超时控制
+        (
+            # 设置子进程超时
+            set -e
+            exec 2>/dev/null
+            
+            # 启动诊断
+            diagnose_php_extension_issues
+        ) &
+        
+        local diagnose_pid=$!
+        local timeout_count=0
+        local max_timeout=300  # 5分钟
+        
+        # 等待诊断完成或超时
+        while kill -0 $diagnose_pid 2>/dev/null; do
+            if [ $timeout_count -ge $max_timeout ]; then
+                log_error "诊断进程超时，强制终止"
+                kill -KILL $diagnose_pid 2>/dev/null
+                wait $diagnose_pid 2>/dev/null || true
+                
+                echo
+                log_info "诊断超时处理建议："
+                log_info "1. 检查系统资源使用情况: top, free -h"
+                log_info "2. 检查磁盘空间和I/O: df -h, iostat"  
+                log_info "3. 检查PHP进程: ps aux | grep php"
+                log_info "4. 手动检查扩展: php -m | grep bcmath"
+                log_info "5. 如果composer很慢，尝试: composer install --ignore-platform-reqs"
+                exit 1
+            fi
+            sleep 1
+            timeout_count=$((timeout_count + 1))
+            
+            # 每30秒显示一次进度
+            if [ $((timeout_count % 30)) -eq 0 ]; then
+                log_info "诊断进行中... (已用时 ${timeout_count}s/${max_timeout}s)"
+            fi
+        done
+        
+        # 等待进程正常结束
+        if wait $diagnose_pid; then
+            log_success "诊断完成"
+        else
+            log_warning "诊断进程异常退出"
+        fi
         exit 0
     fi
     
