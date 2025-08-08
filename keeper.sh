@@ -30,7 +30,7 @@ BACKUP_DIR="$SITE_ROOT/backup/keeper"
 ENV_FILE="$BACKEND_DIR/.env"
 
 # 默认保留备份数
-KEEP_BACKUPS=${KEEP_BACKUPS:-7}
+KEEP_BACKUPS=${KEEP_BACKUPS:-30}
 
 # 操作模式
 ACTION="${1:-backup}"
@@ -62,7 +62,7 @@ show_usage() {
     echo "  help            显示此帮助信息"
     echo ""
     echo "环境变量:"
-    echo "  KEEP_BACKUPS    保留的备份数量（默认：7）"
+    echo "  KEEP_BACKUPS    保留的备份数量（默认：30）"
     echo ""
     echo "示例:"
     echo "  $0                                    # 备份"
@@ -151,17 +151,39 @@ backup_database() {
     TIMESTAMP=$(date +%Y%m%d_%H%M%S)
     DB_BACKUP_FILE="$BACKUP_DIR/db_${DB_DATABASE}_${TIMESTAMP}.sql"
     
-    # 构建 mysqldump 命令
-    DUMP_CMD="mysqldump -h $DB_HOST -P $DB_PORT -u $DB_USERNAME"
-    
     # 设置密码环境变量（如果有密码）
     if [ -n "$DB_PASSWORD" ]; then
         export MYSQL_PWD="$DB_PASSWORD"
     fi
     
+    # 获取所有非_log后缀的表
+    log_info "获取数据表列表（排除_log表）..."
+    # 使用mysql命令获取表列表，排除_log后缀的表
+    TABLES=$(mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USERNAME" "$DB_DATABASE" \
+        -e "SHOW TABLES;" -s 2>/dev/null | grep -v "^Tables_in_" | grep -v "_log$" || true)
+    
+    if [ -z "$TABLES" ]; then
+        log_error "没有找到需要备份的数据表"
+        exit 1
+    fi
+    
+    # 统计表数量
+    TABLE_COUNT=$(echo "$TABLES" | wc -l)
+    LOG_TABLE_COUNT=$(mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USERNAME" "$DB_DATABASE" \
+        -e "SHOW TABLES;" -s 2>/dev/null | grep "_log$" | wc -l || echo 0)
+    
+    log_info "找到 $TABLE_COUNT 个需要备份的表（已排除 $LOG_TABLE_COUNT 个日志表）"
+    
+    # 构建 mysqldump 命令，只备份非_log表
+    DUMP_CMD="mysqldump -h $DB_HOST -P $DB_PORT -u $DB_USERNAME"
+    
+    # 将表列表转换为空格分隔的字符串
+    TABLE_LIST=$(echo "$TABLES" | tr '\n' ' ')
+    
     # 执行备份
-    log_info "导出数据库 $DB_DATABASE..."
-    if $DUMP_CMD --single-transaction --routines --triggers --events --hex-blob --default-character-set=utf8mb4 "$DB_DATABASE" > "$DB_BACKUP_FILE" 2>/dev/null; then
+    log_info "导出数据库 $DB_DATABASE（排除日志表）..."
+    if $DUMP_CMD --single-transaction --routines --triggers --events --hex-blob \
+        --default-character-set=utf8mb4 "$DB_DATABASE" $TABLE_LIST > "$DB_BACKUP_FILE" 2>/dev/null; then
         # 压缩备份文件
         log_info "压缩备份文件..."
         gzip "$DB_BACKUP_FILE"
@@ -170,6 +192,7 @@ backup_database() {
         # 获取文件大小
         FILE_SIZE=$(du -h "$DB_BACKUP_FILE" | cut -f1)
         log_success "数据库备份完成: $(basename "$DB_BACKUP_FILE") ($FILE_SIZE)"
+        log_info "已备份 $TABLE_COUNT 个表，排除了 $LOG_TABLE_COUNT 个日志表"
     else
         log_error "数据库备份失败"
         log_error "请检查数据库连接配置和权限"
