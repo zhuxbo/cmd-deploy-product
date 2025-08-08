@@ -697,7 +697,7 @@ handle_bt_panel() {
         for ext in "${all_extensions[@]}"; do
             if $PHP_CMD -m 2>/dev/null | grep -qi "^$ext$"; then
                 log_success "  ✓ $ext"
-                ((installed_count++))
+                installed_count=$((installed_count + 1))
             else
                 # 判断是手动安装还是自动安装的扩展
                 local is_manual=false
