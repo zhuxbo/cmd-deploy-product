@@ -128,7 +128,7 @@ diagnose_php_extension_issues() {
     # 方法1: composer --version
     log_info "  方法1: composer --version"
     local composer_output=""
-    if composer_output=$(timeout 5s composer --version 2>/dev/null); then
+    if composer_output=$(timeout 10s composer --version 2>/dev/null); then
         log_info "    Composer输出: $composer_output"
         
         # 尝试多种格式提取PHP版本
@@ -156,17 +156,17 @@ diagnose_php_extension_issues() {
             has_composer_issue=true
         fi
     else
-        log_warning "    ! 获取Composer版本信息失败或超时"
+        log_warning "    ! Composer版本检测超时(10秒)，可能系统负载过高"
         has_composer_issue=true
     fi
     
     # 方法2: composer diagnose (如果第一个方法失败)
     if [ "$composer_php_match" = false ]; then
         log_info "  方法2: composer diagnose"
-        if composer_diag=$(timeout 8s composer diagnose 2>/dev/null | grep -i "php version"); then
+        if composer_diag=$(timeout 30s composer diagnose 2>/dev/null | grep -i "php version"); then
             log_info "    诊断信息: $composer_diag"
         else
-            log_warning "    ! Composer诊断超时或失败"
+            log_warning "    ! Composer诊断超时(30秒)，可能网络或系统问题"
         fi
     fi
     
@@ -205,7 +205,7 @@ diagnose_php_extension_issues() {
     local platform_output=""
     local platform_success=false
     
-    if platform_output=$(timeout 15s composer show --platform 2>/dev/null); then
+    if platform_output=$(timeout 60s composer show --platform 2>/dev/null); then
         platform_success=true
         log_success "  ✓ Composer平台检测成功"
         
@@ -283,8 +283,8 @@ diagnose_php_extension_issues() {
         fi
         
     else
-        log_error "  ✗ Composer平台检测失败或超时"
-        log_error "    这通常表示Composer无法正确访问PHP环境"
+        log_error "  ✗ Composer平台检测超时(60秒)或失败"
+        log_error "    可能原因: 网络问题、系统负载过高或Composer配置问题"
         has_composer_issue=true
         platform_success=false
     fi
@@ -2098,19 +2098,11 @@ main() {
         if check_bt_panel; then
             log_success "检测到宝塔环境"
             log_info "步骤3: 选择PHP版本..."
-            if timeout 15s select_bt_php_version >/dev/null 2>&1; then
-                log_success "PHP版本选择完成: $PHP_VERSION"
-            else
-                log_warning "PHP版本选择超时，尝试手动设置..."
-                # 手动设置默认版本
-                for ver in 85 84 83; do
-                    if [ -d "/www/server/php/$ver" ]; then
-                        PHP_VERSION="$ver"
-                        log_info "手动设置PHP版本: $PHP_VERSION"
-                        break
-                    fi
-                done
+            if ! select_bt_php_version; then
+                log_error "未找到可用的PHP版本（需要8.3+）"
+                return 1
             fi
+            log_success "PHP版本选择完成: $PHP_VERSION"
         else
             log_error "未检测到宝塔环境，诊断功能需要宝塔环境"
             exit 1
