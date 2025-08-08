@@ -575,9 +575,27 @@ install_bt_auto_extensions() {
     local missing_auto=()
     local installed_any=false
     
-    # 检查哪些可自动安装的扩展缺失
+    # 检查哪些可自动安装的扩展缺失（CLI/FPM分别检测）
+    local php_cli="/www/server/php/$PHP_VERSION/bin/php"
+    local cli_ini="/www/server/php/$PHP_VERSION/etc/php-cli.ini"
+    local fpm_ini="/www/server/php/$PHP_VERSION/etc/php.ini"
+    
     for ext in "${auto_extensions[@]}"; do
-        if ! $PHP_CMD -m 2>/dev/null | grep -qi "^$ext$"; then
+        local cli_missing=false
+        local fpm_missing=false
+        
+        # 检查CLI模式
+        if ! PHPRC="$cli_ini" $php_cli -m 2>/dev/null | grep -qi "^$ext$"; then
+            cli_missing=true
+        fi
+        
+        # 检查FPM模式  
+        if ! PHPRC="$fpm_ini" $php_cli -m 2>/dev/null | grep -qi "^$ext$"; then
+            fpm_missing=true
+        fi
+        
+        # 如果任一模式缺失，加入待安装列表
+        if [ "$cli_missing" = true ] || [ "$fpm_missing" = true ]; then
             missing_auto+=("$ext")
         fi
     done
