@@ -127,9 +127,35 @@ diagnose_php_extension_issues() {
     # 获取composer路径和信息
     local composer_path=$(which composer)
     local composer_real_path=$(readlink -f "$composer_path" 2>/dev/null || echo "$composer_path")
+    local actual_composer="$composer_path"  # 默认使用找到的composer路径
+    
     log_info "  Composer路径: $composer_path"
     if [ "$composer_path" != "$composer_real_path" ]; then
         log_info "  实际路径: $composer_real_path"
+    fi
+    
+    # 检测composer是否是wrapper脚本
+    if [ -f "$composer_path" ]; then
+        # 检查文件类型
+        local file_type=$(file -b "$composer_path" 2>/dev/null)
+        if [[ "$file_type" == *"shell script"* ]] || [[ "$file_type" == *"bash"* ]] || [[ "$file_type" == *"text"* ]]; then
+            # 是脚本文件，可能是wrapper
+            log_warning "  ! 检测到Composer可能是wrapper脚本"
+            
+            # 检查是否存在composer.original
+            if [ -f "/usr/bin/composer.original" ]; then
+                actual_composer="/usr/bin/composer.original"
+                log_info "  找到原始Composer: $actual_composer"
+            elif [ -f "/usr/local/bin/composer.original" ]; then
+                actual_composer="/usr/local/bin/composer.original"
+                log_info "  找到原始Composer: $actual_composer"
+            elif [ -f "${composer_path}.original" ]; then
+                actual_composer="${composer_path}.original"
+                log_info "  找到原始Composer: $actual_composer"
+            fi
+        elif [[ "$file_type" == *"PHP script"* ]] || [[ "$file_type" == *"phar"* ]]; then
+            log_info "  Composer是PHP/PHAR文件，正常"
+        fi
     fi
     
     # 检测Composer使用的PHP版本
@@ -149,8 +175,8 @@ diagnose_php_extension_issues() {
     # 方法1: composer --version
     log_info "  方法1: composer --version"
     local composer_output=""
-    # 使用宝塔PHP明确执行composer
-    if composer_output=$(timeout 10s $php_cmd $(which composer) --version 2>/dev/null); then
+    # 使用宝塔PHP明确执行真正的composer
+    if composer_output=$(timeout 10s $php_cmd "$actual_composer" --version 2>/dev/null); then
         log_info "    Composer输出: $composer_output"
         
         # 尝试多种格式提取PHP版本
@@ -185,7 +211,7 @@ diagnose_php_extension_issues() {
     # 方法2: composer diagnose (如果第一个方法失败)
     if [ "$composer_php_match" = false ]; then
         log_info "  方法2: composer diagnose"
-        if composer_diag=$(timeout 30s $php_cmd $(which composer) diagnose 2>/dev/null | grep -i "php version"); then
+        if composer_diag=$(timeout 30s $php_cmd "$actual_composer" diagnose 2>/dev/null | grep -i "php version"); then
             log_info "    诊断信息: $composer_diag"
         else
             log_warning "    ! Composer诊断超时(30秒)，可能网络或系统问题"
@@ -229,8 +255,8 @@ diagnose_php_extension_issues() {
     local platform_output=""
     local platform_success=false
     
-    # 使用宝塔PHP执行composer show
-    if platform_output=$(timeout 60s $php_cmd $(which composer) show --platform 2>/dev/null); then
+    # 使用宝塔PHP执行真正的composer show
+    if platform_output=$(timeout 60s $php_cmd "$actual_composer" show --platform 2>/dev/null); then
         platform_success=true
         log_success "  ✓ Composer平台检测成功"
         
