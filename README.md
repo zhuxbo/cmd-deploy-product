@@ -4,6 +4,16 @@
 
 ## 脚本说明
 
+### 核心脚本文件列表
+
+| 脚本文件 | 用途 | 环境要求 |
+|---------|------|----------|
+| install.sh | 首次安装脚本 | 通用 |
+| install-deps.sh | 标准Linux环境依赖安装 | 非宝塔环境 |
+| install-deps-bt.sh | 宝塔环境依赖安装 | 宝塔面板环境 |
+| update.sh | 系统更新脚本 | 通用 |
+| keeper.sh | 备份管理脚本 | 通用 |
+
 ### 1. install.sh - 首次安装脚本
 
 用于全新安装证书管理系统。
@@ -28,20 +38,17 @@
 3. 访问 `/install.php` 完成系统安装
 4. 删除安装文件：`rm backend/public/install.php`
 
-### 2. install-deps.sh - 依赖安装脚本
+### 2. install-deps.sh - 标准Linux环境依赖安装脚本
 
-安装运行证书管理系统所需的 PHP 环境。
+专门用于标准Linux环境的PHP依赖安装。
 
 **功能特点：**
-- 自动检测系统类型（Ubuntu/Debian/CentOS/RHEL）
+- 自动检测系统类型（Ubuntu/Debian/CentOS/RHEL/Fedora/openSUSE）
 - 安装 PHP 8.3+ 及所有必需扩展
-- **宝塔环境智能处理**：
-  - 自动启用被禁用的PHP函数（exec, putenv, pcntl_signal, pcntl_alarm）
-  - 自动安装16个常用PHP扩展
-  - 自动检查和升级Composer版本
-  - 安装后自动校验和重启服务
 - 配置 PHP 优化参数
-- 安装 Redis 等附加依赖
+- 安装 Redis、Nginx、Git 等附加依赖
+- 安装并配置 Composer
+- 自动检测宝塔环境并引导使用正确脚本
 
 **使用方法：**
 ```bash
@@ -53,11 +60,36 @@
 - Debian 9+
 - CentOS 7+
 - RHEL 7+
-- **宝塔面板环境**（大部分操作已自动化）
-  - 自动安装: bcmath, ctype, curl, dom, gd, iconv, intl, json, openssl, pcntl, pcre, pdo, pdo_mysql, tokenizer, xml, zip
-  - 仍需手动安装: calendar, fileinfo, mbstring, redis
+- Fedora 30+
+- openSUSE Leap 15+
 
-### 3. update.sh - 系统更新脚本
+### 3. install-deps-bt.sh - 宝塔环境依赖安装脚本
+
+专门用于宝塔面板环境的PHP依赖配置。
+
+**功能特点：**
+- 检测并选择宝塔PHP版本（8.3+）
+- 自动启用被禁用的PHP函数（exec, putenv, proc_open等）
+- 检测和卸载冲突的系统PHP包
+- 设置默认PHP版本链接
+- 检查并修复Composer wrapper问题
+- 深度诊断模式（-d 参数）
+
+**使用方法：**
+```bash
+# 正常运行
+sudo ./install-deps-bt.sh
+
+# 诊断模式（排查问题）
+sudo ./install-deps-bt.sh -d
+```
+
+**宝塔环境要求：**
+- 已安装PHP 8.3或更高版本
+- 手动安装以下扩展：calendar, fileinfo, mbstring, redis
+- 其他扩展宝塔通常已预装
+
+### 4. update.sh - 系统更新脚本
 
 用于更新已部署的系统到最新版本。
 
@@ -86,21 +118,24 @@ FORCE_UPDATE=1 ./update.sh
 **配置文件：**
 更新脚本使用 `update-config.json` 配置文件，首次运行时自动创建。
 
-### 4. keeper.sh - 备份管理脚本
+### 5. keeper.sh - 备份管理脚本
 
 专门备份 .env 文件和数据库，提供恢复功能。
 
 **功能特点：**
 - 备份 .env 配置文件
 - 自动备份 MySQL 数据库（压缩存储）
+- **自动排除 _logs 后缀的日志表**
 - 创建完整备份包（.tar.gz 格式）
-- 智能清理旧备份（保留指定数量）
+- 智能清理旧备份（默认保留30份）
 - 支持备份恢复和列表功能
+- 磁盘空间检查（最少需要1GB）
+- 支持重试机制和备份验证
 - 支持定时任务
 
 **使用方法：**
 ```bash
-# 执行备份（默认保留7份）
+# 执行备份（默认保留30份）
 ./keeper.sh backup
 
 # 列出备份文件
@@ -146,7 +181,8 @@ site-root/               # 站点根目录
 ├── deploy/              # 部署脚本目录
 │   ├── source/          # 源码临时目录
 │   ├── install.sh       # 安装脚本
-│   ├── install-deps.sh  # 依赖安装脚本
+│   ├── install-deps.sh  # 标准环境依赖脚本
+│   ├── install-deps-bt.sh # 宝塔环境依赖脚本
 │   ├── update.sh        # 更新脚本
 │   ├── keeper.sh        # 备份脚本
 │   └── update-config.json # 更新配置
@@ -166,8 +202,11 @@ cd /path/to/your-site
 git clone https://gitee.com/zhuxbo/cmd-deploy-product.git deploy
 cd deploy
 
-# 2. 安装系统（会自动提示是否安装依赖）
+# 2. 安装系统（会自动检测环境并提示安装依赖）
 ./install.sh
+# install.sh 会自动检测环境：
+# - 宝塔环境：调用 install-deps-bt.sh
+# - 标准环境：调用 install-deps.sh
 
 # 3. 配置数据库
 cd ../backend

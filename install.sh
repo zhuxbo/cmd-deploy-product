@@ -343,7 +343,17 @@ main() {
     read -p "是否需要检查并安装运行环境依赖？(y/n): " -n 1 -r
     echo
     if [[ $REPLY =~ ^[Yy]$ ]]; then
-        DEPS_SCRIPT="$SCRIPT_DIR/install-deps.sh"
+        # 智能选择依赖安装脚本
+        if check_bt_panel; then
+            # 宝塔环境，使用宝塔专用脚本
+            DEPS_SCRIPT="$SCRIPT_DIR/install-deps-bt.sh"
+            log_info "检测到宝塔环境，使用宝塔专用依赖脚本"
+        else
+            # 普通环境，使用标准脚本
+            DEPS_SCRIPT="$SCRIPT_DIR/install-deps.sh"
+            log_info "标准Linux环境，使用通用依赖脚本"
+        fi
+        
         if [ -f "$DEPS_SCRIPT" ]; then
             echo
             log_info "执行依赖安装脚本..."
