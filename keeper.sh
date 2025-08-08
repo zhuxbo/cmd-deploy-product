@@ -227,11 +227,10 @@ backup_database() {
     
     # 显示将要排除的表（如果有）
     if [ -n "$LOG_TABLES" ] && [ "$LOG_COUNT" -gt 0 ]; then
-        log_info "排除的日志表:"
-        echo "$LOG_TABLES" | head -5 | while IFS= read -r table; do
+        log_info "排除的日志表（共 $LOG_COUNT 个）:"
+        echo "$LOG_TABLES" | while IFS= read -r table; do
             [ -n "$table" ] && log_info "  - $table"
         done
-        [ "$LOG_COUNT" -gt 5 ] && log_info "  ... 还有 $((LOG_COUNT - 5)) 个日志表"
     fi
     
     # 执行备份，添加重试机制
