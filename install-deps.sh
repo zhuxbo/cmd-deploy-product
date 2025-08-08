@@ -1029,6 +1029,41 @@ update_composer_robust() {
         update_cmd="sudo -E $update_cmd"
     fi
     
+    # 尝试使用阿里云镜像进行快速更新
+    log_info "尝试使用阿里云镜像快速更新..."
+    local fast_update_success=false
+    
+    # 先尝试从阿里云直接下载最新版本
+    if timeout 60s curl -sL https://mirrors.aliyun.com/composer/composer.phar -o /tmp/composer_new.phar 2>/dev/null; then
+        if $PHP_CMD /tmp/composer_new.phar --version >/dev/null 2>&1; then
+            local new_version=$($PHP_CMD /tmp/composer_new.phar --version 2>&1 | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' | head -1)
+            log_info "从阿里云下载的版本: $new_version"
+            
+            # 替换现有的composer
+            if [ "$use_sudo" = true ]; then
+                if sudo mv /tmp/composer_new.phar "$composer_path" && sudo chmod +x "$composer_path"; then
+                    log_success "Composer 快速更新成功 (阿里云镜像)"
+                    log_success "新版本: $new_version"
+                    fast_update_success=true
+                fi
+            else
+                if mv /tmp/composer_new.phar "$composer_path" && chmod +x "$composer_path"; then
+                    log_success "Composer 快速更新成功 (阿里云镜像)"
+                    log_success "新版本: $new_version"
+                    fast_update_success=true
+                fi
+            fi
+        fi
+        rm -f /tmp/composer_new.phar 2>/dev/null || true
+    fi
+    
+    # 如果快速更新成功，跳过常规更新
+    if [ "$fast_update_success" = true ]; then
+        return 0
+    fi
+    
+    # 常规self-update方式
+    log_info "阿里云快速更新失败，使用常规更新方式..."
     log_info "执行命令: $update_cmd"
     log_info "这可能需要几分钟，请耐心等待..."
     
@@ -1054,10 +1089,12 @@ reinstall_composer() {
     cd /tmp
     rm -f composer-setup.php composer.phar
     
-    # 尝试使用国内镜像下载最新版
+    # 尝试使用国内镜像下载最新版（优先级：速度最快的在前）
     local installer_urls=(
-        "https://install.phpcomposer.com/installer"
         "https://mirrors.aliyun.com/composer/composer.phar"
+        "https://mirrors.tencent.com/composer/composer.phar"
+        "https://install.phpcomposer.com/installer"
+        "https://mirrors.huaweicloud.com/composer/composer.phar"
         "https://getcomposer.org/installer"
     )
     
@@ -1116,10 +1153,16 @@ reinstall_composer() {
         return 1
     fi
     
-    # 配置中国镜像
-    log_info "配置 Composer 中国镜像..."
+    # 配置中国镜像源（优先阿里云）
+    log_info "配置 Composer 中国镜像源..."
+    # 主镜像源（阿里云）
     composer config -g repo.packagist composer https://mirrors.aliyun.com/composer/ 2>/dev/null || true
+    # 其他优化配置
     composer config -g github-protocols https 2>/dev/null || true
+    composer config -g process-timeout 300 2>/dev/null || true
+    composer config -g use-parent-dir true 2>/dev/null || true
+    # 如果阿里云不可用，可以手动切换到腾讯云镜像
+    log_info "如需切换镜像源，可使用: composer config -g repo.packagist composer https://mirrors.tencent.com/composer/"
     
     # 验证安装
     local final_version=$(composer --version 2>&1 | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' | head -1)
