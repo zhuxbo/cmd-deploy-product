@@ -182,117 +182,147 @@ check_php_version() {
 check_php_functions() {
     local required_functions=("exec" "putenv" "pcntl_signal" "pcntl_alarm")
     local optional_functions=("proc_open")
-    local disabled_required=()
-    local disabled_optional=()
-    
-    # 使用找到的PHP命令检测函数
-    PHP_CMD=${PHP_CMD:-php}
+    local cli_disabled_required=()
+    local fpm_disabled_required=()
+    local cli_disabled_optional=()
+    local fpm_disabled_optional=()
     
     if check_bt_panel && [ -n "$PHP_VERSION" ]; then
-        # 宝塔环境：检查两个配置文件
+        # 宝塔环境：分别检查CLI和FPM配置文件
         local fpm_ini="/www/server/php/$PHP_VERSION/etc/php.ini"
         local cli_ini="/www/server/php/$PHP_VERSION/etc/php-cli.ini"
+        local php_cmd="/www/server/php/$PHP_VERSION/bin/php"
         
-        # 静默检查FPM配置
+        # 检查FPM配置（Web模式，php.ini）
         if [ -f "$fpm_ini" ]; then
             local disabled_funcs=$(grep "^disable_functions" "$fpm_ini" 2>/dev/null | sed 's/disable_functions = //' | tr ',' ' ')
             for func in "${required_functions[@]}"; do
                 if echo "$disabled_funcs" | grep -q "\\b$func\\b"; then
-                    disabled_required+="$func"
+                    fpm_disabled_required+=("$func")
+                fi
+            done
+            for func in "${optional_functions[@]}"; do
+                if echo "$disabled_funcs" | grep -q "\\b$func\\b"; then
+                    fpm_disabled_optional+=("$func")
                 fi
             done
         fi
         
-        # 静默检查CLI配置  
+        # 检查CLI配置（命令行模式，php-cli.ini）
         if [ -f "$cli_ini" ]; then
             local disabled_funcs=$(grep "^disable_functions" "$cli_ini" 2>/dev/null | sed 's/disable_functions = //' | tr ',' ' ')
             for func in "${required_functions[@]}"; do
                 if echo "$disabled_funcs" | grep -q "\\b$func\\b"; then
-                    if [[ ! " ${disabled_required[@]} " =~ " ${func} " ]]; then
-                        disabled_required+="$func"
-                    fi
+                    cli_disabled_required+=("$func")
+                fi
+            done
+            for func in "${optional_functions[@]}"; do
+                if echo "$disabled_funcs" | grep -q "\\b$func\\b"; then
+                    cli_disabled_optional+=("$func")
                 fi
             done
         fi
+        
+        # 如果配置文件没有禁用，再通过实际执行验证
+        if [ ${#cli_disabled_required[@]} -eq 0 ]; then
+            for func in "${required_functions[@]}"; do
+                if ! $php_cmd -r "echo function_exists('$func') && !in_array('$func', array_map('trim', explode(',', ini_get('disable_functions')))) ? 'yes' : 'no';" 2>/dev/null | grep -q "yes"; then
+                    cli_disabled_required+=("$func")
+                fi
+            done
+        fi
+        
     else
-        # 标准环境：检查函数
+        # 标准环境：通过PHP命令检查（通常CLI和FPM配置相同）
+        PHP_CMD=${PHP_CMD:-php}
+        
         for func in "${required_functions[@]}"; do
             if ! $PHP_CMD -r "echo function_exists('$func') && !in_array('$func', array_map('trim', explode(',', ini_get('disable_functions')))) ? 'yes' : 'no';" 2>/dev/null | grep -q "yes"; then
-                disabled_required+="$func"
+                cli_disabled_required+=("$func")
+                fpm_disabled_required+=("$func")  # 标准环境通常配置相同
+            fi
+        done
+        
+        for func in "${optional_functions[@]}"; do
+            if ! $PHP_CMD -r "echo function_exists('$func') && !in_array('$func', array_map('trim', explode(',', ini_get('disable_functions')))) ? 'yes' : 'no';" 2>/dev/null | grep -q "yes"; then
+                cli_disabled_optional+=("$func")
+                fpm_disabled_optional+=("$func")
             fi
         done
     fi
     
-    # 检查可选函数
-    for func in "${optional_functions[@]}"; do
-        if ! $PHP_CMD -r "echo function_exists('$func') && !in_array('$func', array_map('trim', explode(',', ini_get('disable_functions')))) ? 'yes' : 'no';" 2>/dev/null | grep -q "yes"; then
-            disabled_optional+="$func"
-        fi
-    done
+    # 导出检测结果供其他函数使用
+    export PHP_CLI_DISABLED_REQUIRED="${cli_disabled_required[*]}"
+    export PHP_FMP_DISABLED_REQUIRED="${fpm_disabled_required[*]}"
+    export PHP_CLI_DISABLED_OPTIONAL="${cli_disabled_optional[*]}"
+    export PHP_FMP_DISABLED_OPTIONAL="${fpm_disabled_optional[*]}"
     
-    # 只在有问题时输出
-    if [ ${#disabled_required[@]} -gt 0 ]; then
-        # 返回失败，让调用者决定是否自动修复
+    # 返回失败条件：CLI或FMP任一模式有必需函数被禁用
+    if [ ${#cli_disabled_required[@]} -gt 0 ] || [ ${#fpm_disabled_required[@]} -gt 0 ]; then
         return 1
     fi
     
     return 0
 }
 
-# 检测PHP扩展（宝塔环境特殊处理）
+# 检测PHP扩展（CLI和FPM模式分别检测）
 check_php_extensions() {
     log_info "检测 PHP 扩展..."
     
-    REQUIRED_EXTENSIONS=(
-        "bcmath"
-        "calendar"
-        "ctype"
-        "curl"
-        "dom"
-        "fileinfo"
-        "gd"
-        "iconv"
-        "intl"
-        "json"
-        "mbstring"
-        "openssl"
-        "pcntl"
-        "pcre"
-        "pdo"
-        "pdo_mysql"
-        "redis"
-        "tokenizer"
-        "xml"
-        "zip"
+    local required_extensions=(
+        "bcmath" "calendar" "ctype" "curl" "dom" "fileinfo"
+        "gd" "iconv" "intl" "json" "mbstring" "openssl"
+        "pcntl" "pcre" "pdo" "pdo_mysql" "redis" "tokenizer" 
+        "xml" "zip"
     )
     
-    MISSING_EXTENSIONS=()
-    
-    # 使用找到的PHP命令检测扩展
-    PHP_CMD=${PHP_CMD:-php}
+    local cli_missing=()
+    local fpm_missing=()
     
     if check_bt_panel && [ -n "$PHP_VERSION" ]; then
-        # 宝塔环境：CLI和FPM共享扩展，使用CLI检测即可
-        log_info "宝塔环境：扩展在CLI和FPM之间共享"
+        # 宝塔环境：分别检查CLI和FPM
+        local php_cli="/www/server/php/$PHP_VERSION/bin/php"
+        local php_fpm="/www/server/php/$PHP_VERSION/bin/php"  # FPM使用同一个可执行文件但不同配置
+        
+        # 检查CLI模式扩展
+        for ext in "${required_extensions[@]}"; do
+            # CLI模式：使用 php-cli.ini 配置
+            if ! PHPRC="/www/server/php/$PHP_VERSION/etc/php-cli.ini" $php_cli -m 2>/dev/null | grep -qi "^$ext$"; then
+                cli_missing+=("$ext")
+            fi
+        done
+        
+        # 检查FPM模式扩展
+        for ext in "${required_extensions[@]}"; do
+            # FPM模式：使用 php.ini 配置  
+            if ! PHPRC="/www/server/php/$PHP_VERSION/etc/php.ini" $php_fpm -m 2>/dev/null | grep -qi "^$ext$"; then
+                fpm_missing+=("$ext")
+            fi
+        done
+        
+    else
+        # 标准环境：通常CLI和FPM共享扩展配置
+        local php_cmd="${PHP_CMD:-php}"
+        
+        for ext in "${required_extensions[@]}"; do
+            if ! $php_cmd -m 2>/dev/null | grep -qi "^$ext$"; then
+                cli_missing+=("$ext")
+                fpm_missing+=("$ext")  # 标准环境通常配置相同
+            fi
+        done
     fi
     
-    for ext in "${REQUIRED_EXTENSIONS[@]}"; do
-        if ! $PHP_CMD -m 2>/dev/null | grep -qi "^$ext$"; then
-            MISSING_EXTENSIONS+=("$ext")
-        fi
-    done
+    # 导出检测结果供其他函数使用
+    export PHP_CLI_MISSING_EXTENSIONS="${cli_missing[*]}"
+    export PHP_FMP_MISSING_EXTENSIONS="${fpm_missing[*]}"
+    export REQUIRED_EXTENSIONS="${required_extensions[*]}"
     
-    if [ ${#MISSING_EXTENSIONS[@]} -eq 0 ]; then
-        log_success "所有必需的 PHP 扩展已安装"
-        return 0
-    else
-        if check_bt_panel; then
-            log_warning "缺少以下 PHP 扩展 (CLI和FPM共享): ${MISSING_EXTENSIONS[*]}"
-        else
-            log_warning "缺少以下 PHP 扩展: ${MISSING_EXTENSIONS[*]}"
-        fi
+    # 返回失败条件：CLI或FMP任一模式有扩展缺失
+    if [ ${#cli_missing[@]} -gt 0 ] || [ ${#fpm_missing[@]} -gt 0 ]; then
         return 1
     fi
+    
+    return 0
 }
 
 # 安装PHP (Ubuntu/Debian)
@@ -661,107 +691,178 @@ handle_bt_panel() {
         # 2. 尝试安装可自动处理的扩展
         install_bt_auto_extensions
         
-        # 3. 安装后重新检测所有函数和扩展状态
+        # 3. 安装后重新检测所有函数和扩展状态（分模式校验）
         echo
-        log_info "校验PHP函数和扩展安装结果..."
+        log_info "校验PHP函数和扩展安装结果 (CLI/FPM分别检查)..."
         echo
         
+        # 重新检测函数和扩展状态
+        check_php_functions >/dev/null 2>&1 || true
+        check_php_extensions >/dev/null 2>&1 || true
+        
         # 校验PHP函数
-        log_info "PHP函数检查:"
+        log_info "PHP函数检查 (CLI vs FPM):"
         local required_functions=("exec" "putenv" "pcntl_signal" "pcntl_alarm")
         local optional_functions=("proc_open")
         local functions_all_ok=true
         
+        # 解析导出的环境变量
+        local cli_disabled_required=($PHP_CLI_DISABLED_REQUIRED)
+        local fpm_disabled_required=($PHP_FMP_DISABLED_REQUIRED)
+        local cli_disabled_optional=($PHP_CLI_DISABLED_OPTIONAL)
+        local fpm_disabled_optional=($PHP_FMP_DISABLED_OPTIONAL)
+        
         # 检查必需函数
         for func in "${required_functions[@]}"; do
-            if $PHP_CMD -r "echo function_exists('$func') && !in_array('$func', array_map('trim', explode(',', ini_get('disable_functions')))) ? 'yes' : 'no';" 2>/dev/null | grep -q "yes"; then
-                log_success "  [OK] $func"
-            else
-                log_warning "  [FAIL] $func (必需，被禁用)"
+            local cli_status="[OK]"
+            local fpm_status="[OK]"
+            
+            # 检查CLI状态
+            if [[ " ${cli_disabled_required[*]} " =~ " ${func} " ]]; then
+                cli_status="[DISABLED]"
                 functions_all_ok=false
+            fi
+            
+            # 检查FPM状态
+            if [[ " ${fpm_disabled_required[*]} " =~ " ${func} " ]]; then
+                fpm_status="[DISABLED]"
+                functions_all_ok=false
+            fi
+            
+            if [ "$cli_status" = "[OK]" ] && [ "$fpm_status" = "[OK]" ]; then
+                log_success "  $func: CLI $cli_status, FPM $fpm_status"
+            else
+                log_warning "  $func: CLI $cli_status, FPM $fpm_status (必需)"
             fi
         done
         
         # 检查可选函数
         for func in "${optional_functions[@]}"; do
-            if $PHP_CMD -r "echo function_exists('$func') && !in_array('$func', array_map('trim', explode(',', ini_get('disable_functions')))) ? 'yes' : 'no';" 2>/dev/null | grep -q "yes"; then
-                log_success "  [OK] $func (可选)"
+            local cli_status="[OK]"
+            local fpm_status="[OK]"
+            
+            if [[ " ${cli_disabled_optional[*]} " =~ " ${func} " ]]; then
+                cli_status="[DISABLED]"
+            fi
+            
+            if [[ " ${fpm_disabled_optional[*]} " =~ " ${func} " ]]; then
+                fpm_status="[DISABLED]"
+            fi
+            
+            if [ "$cli_status" = "[OK]" ] && [ "$fpm_status" = "[OK]" ]; then
+                log_success "  $func: CLI $cli_status, FPM $fpm_status (可选)"
             else
-                log_info "  [DISABLED] $func (可选，被禁用)"
+                log_info "  $func: CLI $cli_status, FPM $fpm_status (可选)"
             fi
         done
         
         echo
-        log_info "PHP扩展检查:"
+        log_info "PHP扩展检查 (CLI vs FPM):"
         
-        # 自动安装的扩展（先检查）
+        # 解析扩展检测结果
+        local cli_missing_extensions=($PHP_CLI_MISSING_EXTENSIONS)
+        local fpm_missing_extensions=($PHP_FMP_MISSING_EXTENSIONS)
+        local required_extensions_array=($REQUIRED_EXTENSIONS)
+        
+        # 分类扩展
         local auto_extensions=(
             "bcmath" "ctype" "curl" "dom" "gd" "iconv" 
             "intl" "json" "openssl" "pcntl" "pcre" 
             "pdo" "pdo_mysql" "tokenizer" "xml" "zip"
         )
-        
-        # 需要手动安装的扩展（最后检查）
         local manual_extensions=("calendar" "fileinfo" "mbstring" "redis")
         
-        local missing_auto_extensions=()
-        local missing_manual_extensions=()
-        local installed_count=0
-        local total_extensions=$((${#auto_extensions[@]} + ${#manual_extensions[@]}))
+        local extensions_all_ok=true
+        local total_extensions=${#required_extensions_array[@]}
+        local cli_missing_count=0
+        local fmp_missing_count=0
         
-        # 先检查自动安装的扩展
+        # 检查自动安装的扩展
         for ext in "${auto_extensions[@]}"; do
-            if $PHP_CMD -m 2>/dev/null | grep -qi "^$ext$"; then
-                log_success "  [OK] $ext"
-                installed_count=$((installed_count + 1))
+            local cli_status="[OK]"
+            local fpm_status="[OK]"
+            
+            if [[ " ${cli_missing_extensions[*]} " =~ " ${ext} " ]]; then
+                cli_status="[MISSING]"
+                extensions_all_ok=false
+                cli_missing_count=$((cli_missing_count + 1))
+            fi
+            
+            if [[ " ${fpm_missing_extensions[*]} " =~ " ${ext} " ]]; then
+                fpm_status="[MISSING]"
+                extensions_all_ok=false
+                fmp_missing_count=$((fmp_missing_count + 1))
+            fi
+            
+            if [ "$cli_status" = "[OK]" ] && [ "$fpm_status" = "[OK]" ]; then
+                log_success "  $ext: CLI $cli_status, FPM $fpm_status"
             else
-                log_error "  [FAIL] $ext (自动安装失败)"
-                missing_auto_extensions+=("$ext")
+                log_error "  $ext: CLI $cli_status, FPM $fpm_status (自动安装失败)"
             fi
         done
         
-        # 最后检查需要手动安装的扩展
+        # 检查需要手动安装的扩展
         echo
-        log_info "手动安装扩展检查:"
+        log_info "手动安装扩展检查 (CLI vs FPM):"
         for ext in "${manual_extensions[@]}"; do
-            if $PHP_CMD -m 2>/dev/null | grep -qi "^$ext$"; then
-                log_success "  [OK] $ext"
-                installed_count=$((installed_count + 1))
+            local cli_status="[OK]"
+            local fpm_status="[OK]"
+            
+            if [[ " ${cli_missing_extensions[*]} " =~ " ${ext} " ]]; then
+                cli_status="[MISSING]"
+                cli_missing_count=$((cli_missing_count + 1))
+            fi
+            
+            if [[ " ${fpm_missing_extensions[*]} " =~ " ${ext} " ]]; then
+                fpm_status="[MISSING]"
+                fmp_missing_count=$((fmp_missing_count + 1))
+            fi
+            
+            if [ "$cli_status" = "[OK]" ] && [ "$fpm_status" = "[OK]" ]; then
+                log_success "  $ext: CLI $cli_status, FPM $fpm_status"
             else
-                log_warning "  [MISSING] $ext (需手动安装)"
-                missing_manual_extensions+=("$ext")
+                log_warning "  $ext: CLI $cli_status, FPM $fpm_status (需手动安装)"
             fi
         done
         
         echo
-        log_info "扩展统计: $installed_count/$total_extensions 已安装"
+        log_info "扩展统计:"
+        log_info "  CLI: $((total_extensions - cli_missing_count))/$total_extensions 已安装"
+        log_info "  FPM: $((total_extensions - fpm_missing_count))/$total_extensions 已安装"
         
         # 4. 输出结果摘要
         local extensions_ok=true
-        if [ ${#missing_auto_extensions[@]} -gt 0 ] || [ ${#missing_manual_extensions[@]} -gt 0 ]; then
+        if [ $cli_missing_count -gt 0 ] || [ $fpm_missing_count -gt 0 ]; then
             extensions_ok=false
         fi
         
         echo
         if [ "$functions_all_ok" = true ] && [ "$extensions_ok" = true ]; then
-            log_success "PHP环境完全就绪！"
+            log_success "PHP环境完全就绪 (CLI和FPM模式)！"
             return 0
         fi
         
         # 显示需要处理的问题摘要
         if [ "$functions_all_ok" = false ]; then
-            log_warning "需要在宝塔面板启用PHP函数"
-            log_info "   路径: PHP设置 -> 禁用函数 -> 移除禁用的函数"
+            log_warning "检测到PHP函数被禁用"
+            log_info "   需要在宝塔面板启用: PHP设置 -> 禁用函数 -> 移除禁用的函数"
+            if [ ${#cli_disabled_required[@]} -gt 0 ]; then
+                log_info "   CLI模式禁用的必需函数: ${cli_disabled_required[*]}"
+            fi
+            if [ ${#fpm_disabled_required[@]} -gt 0 ]; then
+                log_info "   FPM模式禁用的必需函数: ${fpm_disabled_required[*]}"
+            fi
         fi
         
-        if [ ${#missing_auto_extensions[@]} -gt 0 ]; then
-            log_warning "自动安装失败的扩展: ${missing_auto_extensions[*]}"
-            log_info "   这些扩展需要在宝塔面板中手动安装"
-        fi
-        
-        if [ ${#missing_manual_extensions[@]} -gt 0 ]; then
-            log_warning "需要手动安装的扩展: ${missing_manual_extensions[*]}"
-            log_info "   路径: 软件商店 -> PHP -> 安装扩展"
+        if [ $extensions_ok = false ]; then
+            log_warning "检测到PHP扩展缺失"
+            if [ ${#cli_missing_extensions[@]} -gt 0 ]; then
+                log_info "   CLI模式缺失的扩展: ${cli_missing_extensions[*]}"
+            fi
+            if [ ${#fpm_missing_extensions[@]} -gt 0 ]; then
+                log_info "   FPM模式缺失的扩展: ${fpm_missing_extensions[*]}"
+            fi
+            log_info "   安装路径: 软件商店 -> PHP -> 安装扩展"
         fi
         
     else

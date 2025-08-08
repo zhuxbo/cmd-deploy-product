@@ -330,9 +330,12 @@ main() {
     log_warning "1. Nginx 配置【重要】："
     log_warning "   - 进入网站设置 -> 配置文件"
     log_warning "   - 注释掉或删除现有的 root 配置行"
-    log_warning "   - 在 下一行 添加：include $SITE_ROOT/nginx/manager.conf;"
+    log_warning "   - 在 下一行 添加："
+    echo
+    echo "    include $SITE_ROOT/nginx/manager.conf;"
+    echo
     log_warning "   - 保存并重载配置"
-    log_warning "2. 访问安装向导: http://your-domain/api/install.php"
+    log_warning "2. 访问安装向导: http://your-domain/install.php"
     log_warning "（安装向导将自动处理数据库配置、迁移和初始化等其他安装步骤）"
     
     # 询问是否执行依赖安装
