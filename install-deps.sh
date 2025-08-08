@@ -51,11 +51,32 @@ diagnose_php_extension_issues() {
     echo
     log_info "=== 步骤1: 检测系统PHP冲突 ==="
     
-    # 检测系统PHP安装
+    # 检测可能冲突的系统PHP
     log_info "检测可能冲突的系统PHP..."
     local system_phps=()
-    local php_paths=(
-        "/usr/bin/php"
+    
+    # 首先检查 /usr/bin/php
+    if [ -e "/usr/bin/php" ]; then
+        if [ -L "/usr/bin/php" ]; then
+            local link_target=$(readlink -f "/usr/bin/php")
+            if [[ "$link_target" == *"/www/server/php"* ]]; then
+                local php_version=$(timeout 3s /usr/bin/php -r "echo PHP_VERSION;" 2>/dev/null || echo "unknown")
+                log_success "  ✓ /usr/bin/php 已正确指向宝塔PHP: $php_version"
+            else
+                log_warning "  ! /usr/bin/php 软链接指向非宝塔PHP: $link_target"
+                system_phps+=("/usr/bin/php")
+            fi
+        else
+            local php_version=$(timeout 3s /usr/bin/php -r "echo PHP_VERSION;" 2>/dev/null || echo "unknown")
+            log_warning "  ! /usr/bin/php 是系统安装的PHP: $php_version"
+            system_phps+=("/usr/bin/php")
+        fi
+    else
+        log_info "  /usr/bin/php 不存在，需要创建"
+    fi
+    
+    # 检测明显的系统PHP版本
+    local system_php_paths=(
         "/usr/bin/php8.4"
         "/usr/bin/php8.3"
         "/usr/bin/php8.2" 
@@ -64,12 +85,12 @@ diagnose_php_extension_issues() {
         "/usr/bin/php7.4"
     )
     
-    for php_path in "${php_paths[@]}"; do
+    for php_path in "${system_php_paths[@]}"; do
         if [ -x "$php_path" ]; then
             local version=""
             if version=$(timeout 3s "$php_path" -r "echo PHP_VERSION;" 2>/dev/null); then
                 system_phps+=("$php_path")
-                log_info "  发现系统PHP: $php_path -> $version"
+                log_warning "  ! 发现系统PHP: $php_path -> $version (建议卸载)"
             fi
         fi
     done
@@ -247,43 +268,55 @@ diagnose_php_extension_issues() {
             fi
             
             echo
-            log_info "建议的解决方案:"
-            echo "1. [推荐] 卸载冲突的系统PHP包"
-            echo "2. 设置系统默认PHP CLI为宝塔PHP"
-            echo "3. 设置环境变量优先级"
-            echo "4. 忽略问题继续"
+            log_info "建议的解决方案："
+            
+            # 分析系统PHP类型
+            local has_system_packages=false
+            local needs_php_link_fix=false
+            
+            for php_path in "${system_phps[@]}"; do
+                if [[ "$php_path" =~ ^/usr/bin/php[0-9]\.[0-9]$ ]]; then
+                    has_system_packages=true
+                elif [[ "$php_path" == "/usr/bin/php" ]]; then
+                    needs_php_link_fix=true
+                fi
+            done
+            
+            if [ "$has_system_packages" = true ]; then
+                echo "1. [推荐] 卸载冲突的系统PHP包"
+                echo "   系统通过包管理器安装了PHP，会与宝塔PHP冲突"
+            fi
+            
+            if [ "$needs_php_link_fix" = true ]; then
+                echo "2. 修复 /usr/bin/php 指向宝塔PHP"
+                echo "   当前 /usr/bin/php 指向错误的PHP版本"
+            fi
+            
+            echo
+            read -p "是否自动修复这些问题？(y/n): " -n 1 -r choice
             echo
             
-            read -p "选择操作方式 (1-4): " -n 1 -r choice
-            echo
-            
-            case $choice in
-                1)
-                    log_info "执行方案1: 卸载系统PHP冲突包..."
+            if [[ $choice =~ ^[Yy]$ ]]; then
+                # 先卸载系统PHP包
+                if [ "$has_system_packages" = true ]; then
+                    log_info "正在卸载系统PHP包..."
                     if remove_system_php; then
-                        log_success "系统PHP已卸载，建议重新测试"
+                        log_success "系统PHP包已卸载"
                     else
-                        log_warning "卸载失败，请尝试其他方案"
+                        log_warning "部分系统PHP包卸载失败"
                     fi
-                    ;;
-                2)
-                    log_info "执行方案2: 设置系统默认PHP CLI..."
-                    fix_bt_composer_php
-                    log_info "请重新运行诊断验证配置是否生效"
-                    ;;
-                3)
-                    log_info "执行方案3: 手动设置环境变量"
-                    log_info "请执行以下命令:"
-                    log_info "export PATH=\"/www/server/php/$PHP_VERSION/bin:\$PATH\""
-                    log_info "然后重新测试: composer --version"
-                    ;;
-                4)
-                    log_info "跳过修复，继续使用当前配置"
-                    ;;
-                *)
-                    log_info "无效选择，跳过修复"
-                    ;;
-            esac
+                fi
+                
+                # 修复 /usr/bin/php 链接
+                log_info "正在修复 /usr/bin/php 链接..."
+                if fix_bt_composer_php; then
+                    log_success "PHP链接修复完成，请重新运行诊断验证"
+                else
+                    log_warning "PHP链接修复失败，请手动处理"
+                fi
+            else
+                log_info "跳过自动修复，继续诊断..."
+            fi
         else
             log_warning "未检测到系统PHP冲突，但Composer仍有问题"
             log_info "建议检查:"
@@ -1352,38 +1385,73 @@ enable_bt_php_functions() {
 
 # 卸载冲突的系统PHP
 remove_system_php() {
-    log_info "分析系统PHP安装情况..."
+    log_info "分析冲突的系统PHP包..."
     
     # 检测系统包管理器
     if command -v apt-get >/dev/null 2>&1; then
         # Ubuntu/Debian系统
-        local php_packages=""
-        php_packages=$(dpkg -l | grep -E "^ii.*php[0-9]\.[0-9]" | awk '{print $2}' | sort | uniq)
         
-        if [ -n "$php_packages" ]; then
-            log_info "发现以下系统PHP包："
-            echo "$php_packages" | sed 's/^/  - /'
+        # 检查哪些包提供了冲突的PHP命令
+        local conflicting_packages=()
+        local php_commands=("/usr/bin/php8.4" "/usr/bin/php8.3" "/usr/bin/php8.2" "/usr/bin/php8.1" "/usr/bin/php8.0" "/usr/bin/php7.4")
+        
+        for cmd in "${php_commands[@]}"; do
+            if [ -x "$cmd" ]; then
+                # 查找哪个包提供了这个命令
+                local package=""
+                package=$(dpkg -S "$cmd" 2>/dev/null | cut -d: -f1 | head -1)
+                if [ -n "$package" ] && [[ ! " ${conflicting_packages[*]} " =~ " $package " ]]; then
+                    conflicting_packages+=("$package")
+                    log_info "  冲突命令 $cmd 由包 $package 提供"
+                fi
+            fi
+        done
+        
+        # 也检查一些常见的PHP核心包
+        local common_php_packages=("php" "php-cli" "php-common" "php-fpm")
+        for pkg in "${common_php_packages[@]}"; do
+            if dpkg -l | grep -q "^ii.*$pkg[[:space:]]"; then
+                conflicting_packages+=("$pkg")
+                log_info "  发现系统PHP包: $pkg"
+            fi
+        done
+        
+        if [ ${#conflicting_packages[@]} -gt 0 ]; then
+            echo
+            log_warning "发现 ${#conflicting_packages[@]} 个冲突的系统PHP包："
+            printf "  - %s\\n" "${conflicting_packages[@]}"
             echo
             
-            log_warning "注意：卸载系统PHP可能影响依赖这些包的其他软件！"
-            read -p "确定要卸载这些PHP包吗？(y/N): " -n 1 -r confirm
+            log_warning "注意：卸载这些包可能影响依赖它们的其他软件！"
+            log_info "这些包会与宝塔PHP产生冲突，影响Composer正常工作。"
+            echo
+            read -p "确定要卸载这些冲突的PHP包吗？(y/N): " -n 1 -r confirm
             echo
             
             if [[ $confirm =~ ^[Yy]$ ]]; then
-                log_info "开始卸载系统PHP包..."
-                if sudo apt-get remove --autoremove -y $php_packages >/dev/null 2>&1; then
+                log_info "开始卸载冲突的系统PHP包..."
+                if sudo apt-get remove --autoremove -y "${conflicting_packages[@]}" >/dev/null 2>&1; then
                     log_success "系统PHP包已成功卸载"
                     
                     # 清理残留配置
                     sudo apt-get autoremove -y >/dev/null 2>&1
                     sudo apt-get autoclean >/dev/null 2>&1
                     
-                    # 验证卸载结果
-                    if ! command -v php8.3 >/dev/null 2>&1 && ! command -v php >/dev/null 2>&1; then
-                        log_success "验证通过：系统PHP已完全移除"
+                    # 验证卸载结果 - 检查具体的冲突命令是否已移除
+                    local remaining_conflicts=0
+                    for cmd in "${php_commands[@]}"; do
+                        if [ -x "$cmd" ]; then
+                            log_warning "  残留命令: $cmd"
+                            remaining_conflicts=$((remaining_conflicts + 1))
+                        fi
+                    done
+                    
+                    if [ $remaining_conflicts -eq 0 ]; then
+                        log_success "验证通过：冲突的系统PHP命令已移除"
+                        log_info "注意：/usr/bin/php 将通过软链接指向宝塔PHP"
                         return 0
                     else
-                        log_warning "可能仍有残留，但主要冲突应已解决"
+                        log_warning "仍有 $remaining_conflicts 个冲突命令残留，但主要问题应已解决"
                         return 0
                     fi
                 else
@@ -1418,122 +1486,76 @@ fix_bt_composer_php() {
     local bt_php="/www/server/php/$PHP_VERSION/bin/php"
     local expected_version="${PHP_VERSION:0:1}.${PHP_VERSION:1:1}"
     
-    log_info "检查Composer PHP配置..."
+    log_info "检查PHP命令行配置..."
     
-    # 检查系统默认PHP CLI命令
-    local default_php_path=""
-    local default_php_version=""
-    
-    if command -v php >/dev/null 2>&1; then
-        default_php_path=$(which php)
-        if default_php_version=$(timeout 3s php -r "echo PHP_VERSION;" 2>/dev/null); then
-            log_info "系统默认PHP CLI: $default_php_path"
-            log_info "PHP版本: $default_php_version"
+    # 检查 /usr/bin/php 是否存在
+    if [ ! -e "/usr/bin/php" ]; then
+        log_warning "/usr/bin/php 不存在，需要创建"
+    else
+        # 检查是否是软链接
+        if [ -L "/usr/bin/php" ]; then
+            local link_target=$(readlink -f "/usr/bin/php")
+            log_info "当前 /usr/bin/php 指向: $link_target"
             
-            # 检查默认PHP是否已经是宝塔PHP
-            if [[ "$default_php_path" == *"/www/server/php"* ]]; then
-                log_success "✓ 系统默认PHP已经是宝塔PHP"
-                
-                # 检查版本是否匹配
-                if echo "$default_php_version" | grep -q "^$expected_version"; then
-                    log_success "✓ PHP版本匹配 ($expected_version)"
+            if [[ "$link_target" == *"/www/server/php"* ]]; then
+                # 获取版本号
+                if php_version=$(timeout 3s /usr/bin/php -r "echo PHP_VERSION;" 2>/dev/null); then
+                    log_success "✓ /usr/bin/php 已指向宝塔PHP: $php_version"
                     
-                    # 检查Composer使用的PHP版本
-                    if command -v composer >/dev/null 2>&1; then
-                        local composer_php=""
-                        if composer_php=$(timeout 5s composer --version 2>/dev/null | grep -o 'PHP [0-9]\+\.[0-9]\+\.[0-9]\+' | head -1); then
-                            log_info "Composer使用: $composer_php"
-                            if echo "$composer_php" | grep -q "$expected_version"; then
-                                log_success "✓ Composer已正确使用宝塔PHP $expected_version"
-                                return 0
-                            fi
-                        fi
+                    if echo "$php_version" | grep -q "^$expected_version"; then
+                        log_success "✓ 版本匹配项目需求 ($expected_version)"
+                        return 0
+                    else
+                        log_warning "! 版本不匹配，当前: $php_version，需要: $expected_version"
                     fi
-                else
-                    log_warning "! PHP版本不匹配，当前: $default_php_version，预期: $expected_version"
                 fi
             else
-                log_warning "! 系统默认PHP不是宝塔PHP"
-            fi
-        fi
-    else
-        log_warning "未找到系统默认php命令"
-    fi
-    
-    echo
-    log_info "=== 解决方案 ==="
-    log_info "请通过宝塔面板设置默认PHP CLI版本："
-    log_info ""
-    log_info "方法1: 使用宝塔命令行工具（推荐）"
-    log_info "  执行命令: btpython /www/server/panel/script/set_php_cli_version.py $expected_version"
-    log_info ""
-    log_info "方法2: 在宝塔面板Web界面操作"
-    log_info "  1. 登录宝塔面板"
-    log_info "  2. 进入 软件商店 -> 已安装"
-    log_info "  3. 找到 PHP-$expected_version"
-    log_info "  4. 点击设置 -> 命令行版本"
-    log_info "  5. 设置为默认CLI版本"
-    log_info ""
-    log_info "方法3: 手动创建软链接"
-    log_info "  sudo rm -f /usr/bin/php"
-    log_info "  sudo ln -s $bt_php /usr/bin/php"
-    log_info ""
-    log_info "方法4: 修改PATH环境变量（临时）"
-    log_info "  export PATH=\"/www/server/php/$PHP_VERSION/bin:\$PATH\""
-    log_info "  添加到 ~/.bashrc 可永久生效"
-    echo
-    
-    # 询问是否自动设置
-    log_info "是否尝试自动设置默认PHP CLI？"
-    read -p "选择操作 (y/n): " -n 1 -r choice
-    echo
-    
-    if [[ $choice =~ ^[Yy]$ ]]; then
-        log_info "尝试自动设置默认PHP CLI..."
-        
-        # 方法1: 尝试使用宝塔脚本
-        if [ -f "/www/server/panel/script/set_php_cli_version.py" ]; then
-            log_info "使用宝塔脚本设置..."
-            if btpython /www/server/panel/script/set_php_cli_version.py "$expected_version" 2>/dev/null; then
-                log_success "✓ 已通过宝塔脚本设置默认PHP CLI"
-                return 0
-            fi
-        fi
-        
-        # 方法2: 创建软链接
-        log_info "创建软链接..."
-        if [ -L "/usr/bin/php" ] || [ -f "/usr/bin/php" ]; then
-            sudo rm -f /usr/bin/php
-        fi
-        
-        if sudo ln -s "$bt_php" /usr/bin/php; then
-            log_success "✓ 已创建软链接: /usr/bin/php -> $bt_php"
-            
-            # 验证设置
-            if php_version=$(timeout 3s php -r "echo PHP_VERSION;" 2>/dev/null); then
-                log_success "✓ 验证成功，PHP版本: $php_version"
-                
-                # 同时处理php-config和phpize
-                if [ -L "/usr/bin/php-config" ] || [ -f "/usr/bin/php-config" ]; then
-                    sudo rm -f /usr/bin/php-config
-                fi
-                sudo ln -s "/www/server/php/$PHP_VERSION/bin/php-config" /usr/bin/php-config 2>/dev/null || true
-                
-                if [ -L "/usr/bin/phpize" ] || [ -f "/usr/bin/phpize" ]; then
-                    sudo rm -f /usr/bin/phpize
-                fi
-                sudo ln -s "/www/server/php/$PHP_VERSION/bin/phpize" /usr/bin/phpize 2>/dev/null || true
-                
-                return 0
+                log_warning "! /usr/bin/php 指向系统PHP而非宝塔PHP"
             fi
         else
-            log_error "创建软链接失败"
+            # 不是软链接，可能是系统安装的PHP
+            if php_version=$(timeout 3s /usr/bin/php -r "echo PHP_VERSION;" 2>/dev/null); then
+                log_warning "! /usr/bin/php 是系统安装的PHP: $php_version"
+            else
+                log_warning "! /usr/bin/php 存在但无法获取版本"
+            fi
         fi
-    else
-        log_info "跳过自动设置，请手动配置"
     fi
     
-    return 1
+    # 自动修复：创建正确的软链接
+    log_info "正在设置 /usr/bin/php 指向宝塔PHP..."
+    
+    # 备份原文件（如果存在且不是软链接）
+    if [ -f "/usr/bin/php" ] && [ ! -L "/usr/bin/php" ]; then
+        sudo mv /usr/bin/php /usr/bin/php.system.bak 2>/dev/null || true
+        log_info "已备份系统PHP到 /usr/bin/php.system.bak"
+    fi
+    
+    # 删除现有的链接或文件
+    sudo rm -f /usr/bin/php
+    
+    # 创建新的软链接
+    if sudo ln -s "$bt_php" /usr/bin/php; then
+        log_success "✓ 已创建软链接: /usr/bin/php -> $bt_php"
+        
+        # 验证
+        if php_version=$(timeout 3s /usr/bin/php -r "echo PHP_VERSION;" 2>/dev/null); then
+            log_success "✓ 设置成功，PHP版本: $php_version"
+            
+            # 同时处理php-config和phpize
+            sudo rm -f /usr/bin/php-config /usr/bin/phpize
+            sudo ln -s "/www/server/php/$PHP_VERSION/bin/php-config" /usr/bin/php-config 2>/dev/null || true
+            sudo ln -s "/www/server/php/$PHP_VERSION/bin/phpize" /usr/bin/phpize 2>/dev/null || true
+            
+            return 0
+        else
+            log_error "设置后验证失败"
+            return 1
+        fi
+    else
+        log_error "创建软链接失败"
+        return 1
+    fi
 }
 
 # 检查Composer版本和可用性
