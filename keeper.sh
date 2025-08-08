@@ -88,6 +88,26 @@ validate_environment() {
     
     # 创建备份目录
     mkdir -p "$BACKUP_DIR"
+    
+    # 检查磁盘空间（至少需要1GB可用空间）
+    check_disk_space
+}
+
+# 检查磁盘空间
+check_disk_space() {
+    local MIN_SPACE_MB=1024  # 最小需要1GB
+    local AVAILABLE_SPACE_KB=$(df "$BACKUP_DIR" | awk 'NR==2 {print $4}')
+    local AVAILABLE_SPACE_MB=$((AVAILABLE_SPACE_KB / 1024))
+    
+    if [ "$AVAILABLE_SPACE_MB" -lt "$MIN_SPACE_MB" ]; then
+        log_error "磁盘空间不足！"
+        log_error "可用空间: ${AVAILABLE_SPACE_MB}MB"
+        log_error "最小需要: ${MIN_SPACE_MB}MB"
+        log_info "请清理磁盘空间或使用 '$0 clean' 清理旧备份"
+        exit 1
+    else
+        log_info "磁盘空间检查通过（可用: ${AVAILABLE_SPACE_MB}MB）"
+    fi
 }
 
 # 读取数据库配置
@@ -156,49 +176,132 @@ backup_database() {
         export MYSQL_PWD="$DB_PASSWORD"
     fi
     
-    # 获取所有非_logs后缀的表
-    log_info "获取数据表列表（排除_logs表）..."
-    # 使用mysql命令获取表列表，排除_logs后缀的表
-    TABLES=$(mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USERNAME" "$DB_DATABASE" \
-        -e "SHOW TABLES;" -s 2>/dev/null | grep -v "^Tables_in_" | grep -v "_logs$" || true)
+    # 获取所有_logs后缀的表，用于排除
+    log_info "分析数据表结构..."
+    ALL_TABLES=$(mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USERNAME" "$DB_DATABASE" \
+        -e "SHOW TABLES;" -s 2>/dev/null | grep -v "^Tables_in_" || true)
     
-    if [ -z "$TABLES" ]; then
-        log_error "没有找到需要备份的数据表"
+    if [ -z "$ALL_TABLES" ]; then
+        log_error "数据库中没有找到任何表"
         exit 1
     fi
+    
+    # 分离出需要排除的日志表
+    LOG_TABLES=$(echo "$ALL_TABLES" | grep "_logs$" || true)
+    NORMAL_TABLES=$(echo "$ALL_TABLES" | grep -v "_logs$" || true)
     
     # 统计表数量
-    TABLE_COUNT=$(echo "$TABLES" | wc -l)
-    LOG_TABLE_COUNT=$(mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USERNAME" "$DB_DATABASE" \
-        -e "SHOW TABLES;" -s 2>/dev/null | grep "_logs$" | wc -l || echo 0)
+    TOTAL_COUNT=$(echo "$ALL_TABLES" | wc -l)
+    LOG_COUNT=$(echo "$LOG_TABLES" | grep -c . || echo 0)
+    NORMAL_COUNT=$(echo "$NORMAL_TABLES" | grep -c . || echo 0)
     
-    log_info "找到 $TABLE_COUNT 个需要备份的表（已排除 $LOG_TABLE_COUNT 个日志表）"
+    log_info "数据库共有 $TOTAL_COUNT 个表"
+    log_info "将备份 $NORMAL_COUNT 个业务表，排除 $LOG_COUNT 个日志表"
     
-    # 构建 mysqldump 命令，只备份非_logs表
+    # 构建mysqldump基础命令，添加防超时和优化参数
     DUMP_CMD="mysqldump -h $DB_HOST -P $DB_PORT -u $DB_USERNAME"
     
-    # 将表列表转换为空格分隔的字符串
-    TABLE_LIST=$(echo "$TABLES" | tr '\n' ' ')
+    # 重要参数说明：
+    # --single-transaction: 确保InnoDB表的一致性备份
+    # --quick: 不缓存查询，直接输出（处理大表）
+    # --lock-tables=false: 不锁表，避免影响业务
+    # --skip-lock-tables: 跳过LOCK TABLES语句
+    # --compress: 压缩客户端/服务器协议
+    # --max_allowed_packet=1024M: 允许大数据包
+    # --net_buffer_length=32K: 网络缓冲区大小
+    DUMP_OPTIONS="--single-transaction --quick --lock-tables=false --skip-lock-tables"
+    DUMP_OPTIONS="$DUMP_OPTIONS --routines --triggers --events --hex-blob"
+    DUMP_OPTIONS="$DUMP_OPTIONS --default-character-set=utf8mb4"
+    DUMP_OPTIONS="$DUMP_OPTIONS --max_allowed_packet=1024M --net_buffer_length=32K"
+    DUMP_OPTIONS="$DUMP_OPTIONS --compress"
     
-    # 执行备份
-    log_info "导出数据库 $DB_DATABASE（排除日志表）..."
-    if $DUMP_CMD --single-transaction --routines --triggers --events --hex-blob \
-        --default-character-set=utf8mb4 "$DB_DATABASE" $TABLE_LIST > "$DB_BACKUP_FILE" 2>/dev/null; then
-        # 压缩备份文件
-        log_info "压缩备份文件..."
-        gzip "$DB_BACKUP_FILE"
-        DB_BACKUP_FILE="${DB_BACKUP_FILE}.gz"
+    # 构建--ignore-table参数列表
+    IGNORE_TABLES=""
+    if [ -n "$LOG_TABLES" ]; then
+        while IFS= read -r table; do
+            if [ -n "$table" ]; then
+                IGNORE_TABLES="$IGNORE_TABLES --ignore-table=$DB_DATABASE.$table"
+            fi
+        done <<< "$LOG_TABLES"
+    fi
+    
+    # 显示将要排除的表（如果有）
+    if [ -n "$LOG_TABLES" ] && [ "$LOG_COUNT" -gt 0 ]; then
+        log_info "排除的日志表:"
+        echo "$LOG_TABLES" | head -5 | while IFS= read -r table; do
+            [ -n "$table" ] && log_info "  - $table"
+        done
+        [ "$LOG_COUNT" -gt 5 ] && log_info "  ... 还有 $((LOG_COUNT - 5)) 个日志表"
+    fi
+    
+    # 执行备份，添加重试机制
+    log_info "开始导出数据库 $DB_DATABASE..."
+    RETRY_COUNT=0
+    MAX_RETRIES=3
+    
+    while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+        if [ $RETRY_COUNT -gt 0 ]; then
+            log_warning "第 $RETRY_COUNT 次重试..."
+            sleep 5
+        fi
         
-        # 获取文件大小
-        FILE_SIZE=$(du -h "$DB_BACKUP_FILE" | cut -f1)
-        log_success "数据库备份完成: $(basename "$DB_BACKUP_FILE") ($FILE_SIZE)"
-        log_info "已备份 $TABLE_COUNT 个表，排除了 $LOG_TABLE_COUNT 个日志表"
-    else
-        log_error "数据库备份失败"
-        log_error "请检查数据库连接配置和权限"
-        rm -f "$DB_BACKUP_FILE"
+        # 执行备份命令
+        if $DUMP_CMD $DUMP_OPTIONS $IGNORE_TABLES "$DB_DATABASE" > "$DB_BACKUP_FILE" 2>/tmp/mysqldump_error.log; then
+            # 备份成功，验证文件
+            if [ -f "$DB_BACKUP_FILE" ] && [ -s "$DB_BACKUP_FILE" ]; then
+                # 验证SQL文件完整性（检查是否有完整的结束标记）
+                if tail -n 10 "$DB_BACKUP_FILE" | grep -q "Dump completed"; then
+                    log_success "数据库导出成功"
+                    break
+                else
+                    log_warning "备份文件可能不完整，重新尝试"
+                    rm -f "$DB_BACKUP_FILE"
+                    RETRY_COUNT=$((RETRY_COUNT + 1))
+                fi
+            else
+                log_error "备份文件为空或不存在"
+                RETRY_COUNT=$((RETRY_COUNT + 1))
+            fi
+        else
+            # 显示错误信息
+            if [ -f /tmp/mysqldump_error.log ]; then
+                ERROR_MSG=$(cat /tmp/mysqldump_error.log | head -3)
+                [ -n "$ERROR_MSG" ] && log_error "错误信息: $ERROR_MSG"
+            fi
+            RETRY_COUNT=$((RETRY_COUNT + 1))
+        fi
+    done
+    
+    # 检查是否成功
+    if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
+        log_error "数据库备份失败（已重试 $MAX_RETRIES 次）"
+        log_error "请检查："
+        log_error "1. 数据库连接是否正常"
+        log_error "2. 用户权限是否足够"
+        log_error "3. 磁盘空间是否充足"
+        [ -f "$DB_BACKUP_FILE" ] && rm -f "$DB_BACKUP_FILE"
+        [ -f /tmp/mysqldump_error.log ] && rm -f /tmp/mysqldump_error.log
         exit 1
     fi
+    
+    # 压缩备份文件
+    log_info "压缩备份文件..."
+    gzip -9 "$DB_BACKUP_FILE"
+    DB_BACKUP_FILE="${DB_BACKUP_FILE}.gz"
+    
+    # 验证压缩文件
+    if ! gzip -t "$DB_BACKUP_FILE" 2>/dev/null; then
+        log_error "压缩文件验证失败"
+        exit 1
+    fi
+    
+    # 获取文件大小和表统计
+    FILE_SIZE=$(du -h "$DB_BACKUP_FILE" | cut -f1)
+    log_success "数据库备份完成: $(basename "$DB_BACKUP_FILE") ($FILE_SIZE)"
+    log_success "成功备份 $NORMAL_COUNT 个业务表，排除了 $LOG_COUNT 个日志表"
+    
+    # 清理临时文件
+    [ -f /tmp/mysqldump_error.log ] && rm -f /tmp/mysqldump_error.log
     
     # 清除密码环境变量
     unset MYSQL_PWD
