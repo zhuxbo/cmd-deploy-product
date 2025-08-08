@@ -186,6 +186,10 @@ diagnose_php_extension_issues() {
     echo
     log_info "=== Composer环境模拟测试 ==="
     
+    # 先尝试修复Composer PHP版本问题
+    log_info "尝试修复Composer PHP版本..."
+    fix_bt_composer_php
+    
     # 检查composer运行时PHP环境
     log_info "开始Composer环境检查..."
     if command -v composer >/dev/null 2>&1; then
@@ -226,12 +230,14 @@ diagnose_php_extension_issues() {
     
     echo
     log_info "=== 可能的解决方案 ==="
-    log_info "1. 如果是内置扩展但composer检测不到，可能是PHP编译配置问题"
-    log_info "2. 对于缺失的扩展文件，使用宝塔面板手动安装对应扩展"
-    log_info "3. 如果CLI和FPM状态不一致，确保两个配置文件都正确"  
-    log_info "4. 重启PHP-FPM服务：sudo systemctl restart php${PHP_VERSION: -2}-fpm"
-    log_info "5. 如果问题持续，可以在composer.json中忽略平台检查："
-    log_info "   composer install --ignore-platform-reqs"
+    log_info "1. 已尝试修复Composer PHP版本 - 如果版本仍不匹配："
+    log_info "   可能需要手动设置PATH或重新安装Composer"
+    log_info "2. 如果扩展已加载但Composer检测不到："
+    log_info "   - 重启PHP-FPM服务：sudo systemctl restart php${PHP_VERSION: -2}-fpm"  
+    log_info "   - 或者在composer.json中忽略平台检查：composer install --ignore-platform-reqs"
+    log_info "3. 对于缺失的扩展文件，使用宝塔面板手动安装对应扩展"
+    log_info "4. 如果CLI和FPM状态不一致，确保两个配置文件都正确"
+    log_info "5. 检查PHP编译配置问题，可能需要重新编译PHP"
     
     echo
 }
@@ -1215,6 +1221,95 @@ enable_bt_php_functions() {
     fi
 }
 
+# 修复宝塔环境Composer PHP版本问题
+fix_bt_composer_php() {
+    if ! check_bt_panel || [ -z "$PHP_VERSION" ]; then
+        return 0
+    fi
+    
+    local bt_php="/www/server/php/$PHP_VERSION/bin/php"
+    
+    log_info "修复宝塔环境Composer PHP版本..."
+    log_info "预期使用PHP路径: $bt_php"
+    
+    # 检查Composer当前使用的PHP版本
+    local current_composer_php=""
+    if command -v composer &> /dev/null; then
+        # 尝试获取Composer使用的PHP信息
+        current_composer_php=$(timeout 8s composer --version 2>/dev/null | grep -o 'PHP [0-9]\+\.[0-9]\+\.[0-9]\+' | head -1 2>/dev/null || echo "")
+        
+        if [ -n "$current_composer_php" ]; then
+            log_info "Composer当前使用: $current_composer_php"
+        else
+            log_warning "无法获取Composer当前PHP版本"
+        fi
+    fi
+    
+    # 创建Composer wrapper脚本，强制使用宝塔PHP
+    local composer_wrapper="/usr/local/bin/composer-bt"
+    log_info "创建Composer wrapper: $composer_wrapper"
+    
+    # 检查原始composer路径
+    local original_composer=$(which composer 2>/dev/null || echo "/usr/local/bin/composer")
+    
+    # 如果原始composer是phar文件，直接指向它；否则使用备份文件
+    local composer_target=""
+    if [ -f "${original_composer}.original" ]; then
+        composer_target="${original_composer}.original"
+    elif [ -f "$original_composer" ] && file "$original_composer" | grep -q "PHAR"; then
+        composer_target="$original_composer"
+    else
+        composer_target="$original_composer"
+    fi
+    
+    # 创建wrapper脚本
+    cat <<EOF | sudo tee "$composer_wrapper" > /dev/null
+#!/bin/bash
+# Composer wrapper for BaoTa Panel - Auto generated
+# Forces composer to use BaoTa PHP $PHP_VERSION
+
+export PHP_BINARY="$bt_php"
+export COMPOSER_RUNTIME_BIN_DIR="/www/server/php/$PHP_VERSION/bin"
+
+# 直接使用宝塔PHP执行composer
+exec "$bt_php" "$composer_target" "\$@"
+EOF
+    
+    sudo chmod +x "$composer_wrapper"
+    
+    # 备份原始composer（如果还没备份）
+    if [ ! -f "${original_composer}.original" ]; then
+        sudo cp "$original_composer" "${original_composer}.original" 2>/dev/null || true
+        log_info "已备份原始composer"
+    fi
+    
+    # 用wrapper替换原始composer
+    sudo cp "$composer_wrapper" "$original_composer"
+    log_info "已应用Composer wrapper"
+    
+    # 测试修复效果
+    log_info "测试修复效果..."
+    if command -v composer &> /dev/null; then
+        local new_composer_php=""
+        if new_composer_php=$(timeout 8s composer --version 2>/dev/null | grep -o 'PHP [0-9]\+\.[0-9]\+\.[0-9]\+' | head -1 2>/dev/null); then
+            log_success "修复后Composer使用: $new_composer_php"
+            
+            # 验证PHP版本是否匹配
+            local expected_version="${PHP_VERSION:0:1}.${PHP_VERSION:1:1}"
+            if echo "$new_composer_php" | grep -q "$expected_version"; then
+                log_success "PHP版本匹配成功！"
+                return 0
+            else
+                log_warning "PHP版本仍不匹配，但可能可以正常工作"
+            fi
+        else
+            log_warning "修复后仍无法获取Composer版本信息"
+        fi
+    fi
+    
+    return 0
+}
+
 # 检查Composer版本和可用性
 check_composer() {
     log_info "检查Composer..."
@@ -1800,6 +1895,11 @@ main() {
         # 宝塔环境自动处理Composer
         echo
         log_info "检查 Composer..."
+        
+        # 先修复宝塔环境Composer PHP版本问题
+        fix_bt_composer_php
+        echo
+        
         if ! check_composer; then
             log_info "自动安装 Composer..."
             install_or_update_composer
