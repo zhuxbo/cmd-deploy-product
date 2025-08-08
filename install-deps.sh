@@ -669,56 +669,72 @@ handle_bt_panel() {
         # 校验PHP函数
         log_info "PHP函数检查:"
         local required_functions=("exec" "putenv" "pcntl_signal" "pcntl_alarm")
+        local optional_functions=("proc_open")
         local functions_all_ok=true
         
+        # 检查必需函数
         for func in "${required_functions[@]}"; do
             if $PHP_CMD -r "echo function_exists('$func') && !in_array('$func', array_map('trim', explode(',', ini_get('disable_functions')))) ? 'yes' : 'no';" 2>/dev/null | grep -q "yes"; then
                 log_success "  ✓ $func"
             else
-                log_warning "  ✗ $func (被禁用)"
+                log_warning "  ✗ $func (必需，被禁用)"
                 functions_all_ok=false
+            fi
+        done
+        
+        # 检查可选函数
+        for func in "${optional_functions[@]}"; do
+            if $PHP_CMD -r "echo function_exists('$func') && !in_array('$func', array_map('trim', explode(',', ini_get('disable_functions')))) ? 'yes' : 'no';" 2>/dev/null | grep -q "yes"; then
+                log_success "  ✓ $func (可选)"
+            else
+                log_info "  ✗ $func (可选，被禁用)"
             fi
         done
         
         echo
         log_info "PHP扩展检查:"
-        local all_extensions=(
-            "bcmath" "calendar" "ctype" "curl" "dom" "fileinfo" 
-            "gd" "iconv" "intl" "json" "mbstring" "openssl" 
-            "pcntl" "pcre" "pdo" "pdo_mysql" "redis" 
-            "tokenizer" "xml" "zip"
+        
+        # 自动安装的扩展（先检查）
+        local auto_extensions=(
+            "bcmath" "ctype" "curl" "dom" "gd" "iconv" 
+            "intl" "json" "openssl" "pcntl" "pcre" 
+            "pdo" "pdo_mysql" "tokenizer" "xml" "zip"
         )
+        
+        # 需要手动安装的扩展（最后检查）
+        local manual_extensions=("calendar" "fileinfo" "mbstring" "redis")
         
         local missing_auto_extensions=()
         local missing_manual_extensions=()
-        local manual_extensions=("calendar" "fileinfo" "mbstring" "redis")
         local installed_count=0
+        local total_extensions=$((${#auto_extensions[@]} + ${#manual_extensions[@]}))
         
-        for ext in "${all_extensions[@]}"; do
+        # 先检查自动安装的扩展
+        for ext in "${auto_extensions[@]}"; do
             if $PHP_CMD -m 2>/dev/null | grep -qi "^$ext$"; then
                 log_success "  ✓ $ext"
                 installed_count=$((installed_count + 1))
             else
-                # 判断是手动安装还是自动安装的扩展
-                local is_manual=false
-                for manual_ext in "${manual_extensions[@]}"; do
-                    if [ "$ext" = "$manual_ext" ]; then
-                        is_manual=true
-                        log_warning "  ✗ $ext (需手动安装)"
-                        missing_manual_extensions+=("$ext")
-                        break
-                    fi
-                done
-                
-                if [ "$is_manual" = false ]; then
-                    log_error "  ✗ $ext (自动安装失败)"
-                    missing_auto_extensions+=("$ext")
-                fi
+                log_error "  ✗ $ext (自动安装失败)"
+                missing_auto_extensions+=("$ext")
+            fi
+        done
+        
+        # 最后检查需要手动安装的扩展
+        echo
+        log_info "手动安装扩展检查:"
+        for ext in "${manual_extensions[@]}"; do
+            if $PHP_CMD -m 2>/dev/null | grep -qi "^$ext$"; then
+                log_success "  ✓ $ext"
+                installed_count=$((installed_count + 1))
+            else
+                log_warning "  ✗ $ext (需手动安装)"
+                missing_manual_extensions+=("$ext")
             fi
         done
         
         echo
-        log_info "扩展统计: $installed_count/${#all_extensions[@]} 已安装"
+        log_info "扩展统计: $installed_count/$total_extensions 已安装"
         
         # 4. 输出结果摘要
         local extensions_ok=true
