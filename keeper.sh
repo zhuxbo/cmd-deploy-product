@@ -133,7 +133,8 @@ backup_env() {
     FILE_SIZE=$(du -h "$ENV_BACKUP_FILE" | cut -f1)
     log_success ".env 备份完成: $(basename "$ENV_BACKUP_FILE") ($FILE_SIZE)"
     
-    echo "$ENV_BACKUP_FILE"
+    # 返回文件路径（使用全局变量而不是echo）
+    RETURN_ENV_BACKUP="$ENV_BACKUP_FILE"
 }
 
 # 备份数据库
@@ -179,7 +180,8 @@ backup_database() {
     # 清除密码环境变量
     unset MYSQL_PWD
     
-    echo "$DB_BACKUP_FILE"
+    # 返回文件路径（使用全局变量而不是echo）
+    RETURN_DB_BACKUP="$DB_BACKUP_FILE"
 }
 
 # 创建完整备份包
@@ -227,7 +229,8 @@ EOF
     PACKAGE_SIZE=$(du -h "$BACKUP_PACKAGE" | cut -f1)
     log_success "备份包创建完成: $(basename "$BACKUP_PACKAGE") ($PACKAGE_SIZE)"
     
-    echo "$BACKUP_PACKAGE"
+    # 返回文件路径（使用全局变量而不是echo）
+    RETURN_BACKUP_PACKAGE="$BACKUP_PACKAGE"
 }
 
 # 执行备份
@@ -244,13 +247,16 @@ do_backup() {
     read_db_config
     
     # 备份 .env 文件
-    ENV_BACKUP=$(backup_env)
+    backup_env
+    ENV_BACKUP="$RETURN_ENV_BACKUP"
     
     # 备份数据库
-    DB_BACKUP=$(backup_database)
+    backup_database
+    DB_BACKUP="$RETURN_DB_BACKUP"
     
     # 创建备份包
-    BACKUP_PACKAGE=$(create_backup_package "$ENV_BACKUP" "$DB_BACKUP")
+    create_backup_package "$ENV_BACKUP" "$DB_BACKUP"
+    BACKUP_PACKAGE="$RETURN_BACKUP_PACKAGE"
     
     log_success "============================================"
     log_success "备份完成！"
