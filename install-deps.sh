@@ -61,7 +61,16 @@ diagnose_php_extension_issues() {
             local link_target=$(readlink -f "/usr/bin/php")
             if [[ "$link_target" == *"/www/server/php"* ]]; then
                 local php_version=$(timeout 3s /usr/bin/php -r "echo PHP_VERSION;" 2>/dev/null || echo "unknown")
-                log_success "  ✓ /usr/bin/php 已正确指向宝塔PHP: $php_version"
+                log_info "  /usr/bin/php 指向宝塔PHP: $php_version"
+                
+                # 检查版本是否匹配
+                if echo "$php_version" | grep -q "^$expected_version"; then
+                    log_success "  ✓ PHP版本匹配项目需求 ($expected_version)"
+                else
+                    log_warning "  ! PHP版本不匹配，当前: $php_version，需要: $expected_version"
+                    log_info "  需要修复 /usr/bin/php 指向正确的宝塔PHP版本"
+                    system_phps+=("/usr/bin/php")
+                fi
             else
                 log_warning "  ! /usr/bin/php 软链接指向非宝塔PHP: $link_target"
                 system_phps+=("/usr/bin/php")
@@ -118,17 +127,34 @@ diagnose_php_extension_issues() {
     
     # 方法1: composer --version
     log_info "  方法1: composer --version"
-    if composer_php_version=$(timeout 5s composer --version 2>/dev/null | grep -o 'PHP [0-9]\+\.[0-9]\+\.[0-9]\+' | head -1); then
-        log_info "    检测到: $composer_php_version"
-        if echo "$composer_php_version" | grep -q "$expected_version"; then
-            log_success "    ✓ PHP版本匹配宝塔PHP $expected_version"
-            composer_php_match=true
+    local composer_output=""
+    if composer_output=$(timeout 5s composer --version 2>/dev/null); then
+        log_info "    Composer输出: $composer_output"
+        
+        # 尝试多种格式提取PHP版本
+        if composer_php_version=$(echo "$composer_output" | grep -o 'PHP [0-9]\+\.[0-9]\+\.[0-9]\+' | head -1); then
+            log_info "    检测到PHP版本: $composer_php_version"
+        elif composer_php_version=$(echo "$composer_output" | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' | head -1); then
+            composer_php_version="PHP $composer_php_version"
+            log_info "    检测到PHP版本: $composer_php_version"
         else
-            log_error "    ✗ PHP版本不匹配，预期: PHP $expected_version"
+            log_warning "    ! 无法从输出中提取PHP版本"
+            composer_php_version=""
+        fi
+        
+        if [ -n "$composer_php_version" ]; then
+            if echo "$composer_php_version" | grep -q "$expected_version"; then
+                log_success "    ✓ PHP版本匹配宝塔PHP $expected_version"
+                composer_php_match=true
+            else
+                log_error "    ✗ PHP版本不匹配，预期: PHP $expected_version，实际: $composer_php_version"
+                has_composer_issue=true
+            fi
+        else
             has_composer_issue=true
         fi
     else
-        log_warning "    ! 获取版本信息失败"
+        log_warning "    ! 获取Composer版本信息失败或超时"
         has_composer_issue=true
     fi
     
@@ -288,12 +314,17 @@ diagnose_php_extension_issues() {
             fi
             
             if [ "$needs_php_link_fix" = true ]; then
-                echo "2. 修复 /usr/bin/php 指向宝塔PHP"
-                echo "   当前 /usr/bin/php 指向错误的PHP版本"
+                echo "2. 修复 /usr/bin/php 指向正确的宝塔PHP版本"
+                echo "   当前 /usr/bin/php 版本不匹配，需要指向PHP $expected_version"
+            fi
+            
+            # 如果两个问题都不存在，说明可能还有其他问题
+            if [ "$has_system_packages" = false ] && [ "$needs_php_link_fix" = false ]; then
+                echo "检测到未知的PHP配置问题，建议手动检查"
             fi
             
             echo
-            read -p "是否自动修复这些问题？(y/n): " -n 1 -r choice
+            read -p "是否自动修复这些问题？(y/n): " -n 1 -r choice < /dev/tty
             echo
             
             if [[ $choice =~ ^[Yy]$ ]]; then
@@ -1425,7 +1456,7 @@ remove_system_php() {
             log_warning "注意：卸载这些包可能影响依赖它们的其他软件！"
             log_info "这些包会与宝塔PHP产生冲突，影响Composer正常工作。"
             echo
-            read -p "确定要卸载这些冲突的PHP包吗？(y/N): " -n 1 -r confirm
+            read -p "确定要卸载这些冲突的PHP包吗？(y/N): " -n 1 -r confirm < /dev/tty
             echo
             
             if [[ $confirm =~ ^[Yy]$ ]]; then
@@ -2082,52 +2113,21 @@ main() {
         log_info "步骤4: 开始扩展诊断..."
         log_info "诊断超时限制: 5分钟"
         
-        # 使用后台进程和超时控制
-        (
-            # 设置子进程超时
-            set -e
-            exec 2>/dev/null
-            
-            # 启动诊断
-            diagnose_php_extension_issues
-        ) &
-        
-        local diagnose_pid=$!
-        local timeout_count=0
-        local max_timeout=300  # 5分钟
-        
-        # 等待诊断完成或超时
-        while kill -0 $diagnose_pid 2>/dev/null; do
-            if [ $timeout_count -ge $max_timeout ]; then
-                log_error "诊断进程超时，强制终止"
-                kill -KILL $diagnose_pid 2>/dev/null
-                wait $diagnose_pid 2>/dev/null || true
-                
-                echo
-                log_info "诊断超时处理建议："
-                log_info "1. 检查系统资源使用情况: top, free -h"
-                log_info "2. 检查磁盘空间和I/O: df -h, iostat"  
-                log_info "3. 检查PHP进程: ps aux | grep php"
-                log_info "4. 手动检查扩展: php -m | grep bcmath"
-                log_info "5. 如果composer很慢，尝试: composer install --ignore-platform-reqs"
-                exit 1
-            fi
-            sleep 1
-            timeout_count=$((timeout_count + 1))
-            
-            # 每30秒显示一次进度
-            if [ $((timeout_count % 30)) -eq 0 ]; then
-                log_info "诊断进行中... (已用时 ${timeout_count}s/${max_timeout}s)"
-            fi
-        done
-        
-        # 等待进程正常结束
-        if wait $diagnose_pid; then
+        # 直接运行诊断（支持用户交互）
+        log_info "开始诊断..."
+        if diagnose_php_extension_issues; then
             log_success "诊断完成"
         else
-            log_warning "诊断进程异常退出"
+            log_warning "诊断过程中出现问题"
+            echo
+            log_info "故障排除建议："
+            log_info "1. 检查系统资源使用情况: top, free -h"
+            log_info "2. 检查磁盘空间和I/O: df -h, iostat"  
+            log_info "3. 检查PHP进程: ps aux | grep php"
+            log_info "4. 手动检查扩展: php -m | grep bcmath"
+            log_info "5. 如果composer很慢，尝试: composer install --ignore-platform-reqs"
         fi
-        exit 0
+        return 0
     fi
     
     # 检测系统
