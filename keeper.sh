@@ -156,11 +156,11 @@ backup_database() {
         export MYSQL_PWD="$DB_PASSWORD"
     fi
     
-    # 获取所有非_log后缀的表
-    log_info "获取数据表列表（排除_log表）..."
-    # 使用mysql命令获取表列表，排除_log后缀的表
+    # 获取所有非_logs后缀的表
+    log_info "获取数据表列表（排除_logs表）..."
+    # 使用mysql命令获取表列表，排除_logs后缀的表
     TABLES=$(mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USERNAME" "$DB_DATABASE" \
-        -e "SHOW TABLES;" -s 2>/dev/null | grep -v "^Tables_in_" | grep -v "_log$" || true)
+        -e "SHOW TABLES;" -s 2>/dev/null | grep -v "^Tables_in_" | grep -v "_logs$" || true)
     
     if [ -z "$TABLES" ]; then
         log_error "没有找到需要备份的数据表"
@@ -170,11 +170,11 @@ backup_database() {
     # 统计表数量
     TABLE_COUNT=$(echo "$TABLES" | wc -l)
     LOG_TABLE_COUNT=$(mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USERNAME" "$DB_DATABASE" \
-        -e "SHOW TABLES;" -s 2>/dev/null | grep "_log$" | wc -l || echo 0)
+        -e "SHOW TABLES;" -s 2>/dev/null | grep "_logs$" | wc -l || echo 0)
     
     log_info "找到 $TABLE_COUNT 个需要备份的表（已排除 $LOG_TABLE_COUNT 个日志表）"
     
-    # 构建 mysqldump 命令，只备份非_log表
+    # 构建 mysqldump 命令，只备份非_logs表
     DUMP_CMD="mysqldump -h $DB_HOST -P $DB_PORT -u $DB_USERNAME"
     
     # 将表列表转换为空格分隔的字符串
