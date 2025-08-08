@@ -39,6 +39,14 @@ show_help() {
 diagnose_php_extension_issues() {
     log_info "运行PHP扩展深度诊断模式..."
     
+    # 检测运行环境
+    if [ "$EUID" -eq 0 ]; then
+        log_info "以root权限运行（正常）"
+        log_info "提示：Composer命令将使用www用户执行"
+    else
+        log_warning "非root权限运行，某些检测可能失败"
+    fi
+    
     if ! check_bt_panel; then
         log_error "未检测到宝塔环境，诊断功能需要宝塔环境"
         return 1
@@ -146,12 +154,33 @@ diagnose_php_extension_issues() {
     # 测试composer执行
     if [ -e "/usr/bin/php" ]; then
         log_info "  测试Composer执行..."
-        local composer_version=$(timeout 5s /usr/bin/php $(which composer) --version 2>&1 | head -1)
-        if [[ "$composer_version" == *"Composer version"* ]]; then
+        
+        # 根据权限选择执行方式
+        local composer_cmd="/usr/bin/php $(which composer) --version"
+        local composer_version=""
+        local composer_error=""
+        
+        if [ "$EUID" -eq 0 ]; then
+            # root权限时，切换到www用户执行
+            log_info "    使用www用户执行composer..."
+            composer_version=$(sudo -u www bash -c "$composer_cmd" 2>&1 | head -1)
+            composer_error=$?
+        else
+            # 非root直接执行
+            composer_version=$(timeout 5s $composer_cmd 2>&1 | head -1)
+            composer_error=$?
+        fi
+        
+        if [ $composer_error -eq 0 ] && [[ "$composer_version" == *"Composer version"* ]]; then
             log_success "  ✓ Composer可以正常执行"
             log_info "    $composer_version"
         else
             log_error "  ✗ Composer执行失败"
+            log_info "    输出: $composer_version"
+            log_info "    返回码: $composer_error"
+            if [ "$EUID" -eq 0 ]; then
+                log_info "    尝试检查www用户权限和composer文件权限"
+            fi
             has_issue=true
         fi
     fi
@@ -163,7 +192,17 @@ diagnose_php_extension_issues() {
         log_info "  执行: composer show --platform"
         
         local platform_output=""
-        if platform_output=$(timeout 30s /usr/bin/php $(which composer) show --platform 2>/dev/null); then
+        local platform_cmd="/usr/bin/php $(which composer) show --platform"
+        
+        # 根据权限选择执行方式
+        if [ "$EUID" -eq 0 ]; then
+            log_info "  使用www用户执行扩展检测..."
+            platform_output=$(sudo -u www bash -c "$platform_cmd" 2>&1)
+        else
+            platform_output=$(timeout 30s $platform_cmd 2>&1)
+        fi
+        
+        if [ $? -eq 0 ] && [ -n "$platform_output" ]; then
             local ext_count=$(echo "$platform_output" | grep -c "^ext-" || echo "0")
             log_success "  ✓ 检测到 $ext_count 个PHP扩展"
             
@@ -190,6 +229,12 @@ diagnose_php_extension_issues() {
             fi
         else
             log_error "  ✗ Composer平台检测失败"
+            if [ -n "$platform_output" ]; then
+                log_info "    错误信息: $(echo "$platform_output" | head -1)"
+            fi
+            if [ "$EUID" -eq 0 ]; then
+                log_info "    请检查www用户是否有权限访问composer和PHP"
+            fi
             has_issue=true
         fi
     else
