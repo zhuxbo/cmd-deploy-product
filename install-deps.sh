@@ -675,9 +675,9 @@ handle_bt_panel() {
         # 检查必需函数
         for func in "${required_functions[@]}"; do
             if $PHP_CMD -r "echo function_exists('$func') && !in_array('$func', array_map('trim', explode(',', ini_get('disable_functions')))) ? 'yes' : 'no';" 2>/dev/null | grep -q "yes"; then
-                log_success "  ✓ $func"
+                log_success "  [OK] $func"
             else
-                log_warning "  ✗ $func (必需，被禁用)"
+                log_warning "  [FAIL] $func (必需，被禁用)"
                 functions_all_ok=false
             fi
         done
@@ -685,9 +685,9 @@ handle_bt_panel() {
         # 检查可选函数
         for func in "${optional_functions[@]}"; do
             if $PHP_CMD -r "echo function_exists('$func') && !in_array('$func', array_map('trim', explode(',', ini_get('disable_functions')))) ? 'yes' : 'no';" 2>/dev/null | grep -q "yes"; then
-                log_success "  ✓ $func (可选)"
+                log_success "  [OK] $func (可选)"
             else
-                log_info "  ✗ $func (可选，被禁用)"
+                log_info "  [DISABLED] $func (可选，被禁用)"
             fi
         done
         
@@ -712,10 +712,10 @@ handle_bt_panel() {
         # 先检查自动安装的扩展
         for ext in "${auto_extensions[@]}"; do
             if $PHP_CMD -m 2>/dev/null | grep -qi "^$ext$"; then
-                log_success "  ✓ $ext"
+                log_success "  [OK] $ext"
                 installed_count=$((installed_count + 1))
             else
-                log_error "  ✗ $ext (自动安装失败)"
+                log_error "  [FAIL] $ext (自动安装失败)"
                 missing_auto_extensions+=("$ext")
             fi
         done
@@ -725,10 +725,10 @@ handle_bt_panel() {
         log_info "手动安装扩展检查:"
         for ext in "${manual_extensions[@]}"; do
             if $PHP_CMD -m 2>/dev/null | grep -qi "^$ext$"; then
-                log_success "  ✓ $ext"
+                log_success "  [OK] $ext"
                 installed_count=$((installed_count + 1))
             else
-                log_warning "  ✗ $ext (需手动安装)"
+                log_warning "  [MISSING] $ext (需手动安装)"
                 missing_manual_extensions+=("$ext")
             fi
         done
@@ -744,23 +744,23 @@ handle_bt_panel() {
         
         echo
         if [ "$functions_all_ok" = true ] && [ "$extensions_ok" = true ]; then
-            log_success "✅ PHP环境完全就绪！"
+            log_success "PHP环境完全就绪！"
             return 0
         fi
         
         # 显示需要处理的问题摘要
         if [ "$functions_all_ok" = false ]; then
-            log_warning "🔧 需要在宝塔面板启用PHP函数"
+            log_warning "需要在宝塔面板启用PHP函数"
             log_info "   路径: PHP设置 -> 禁用函数 -> 移除禁用的函数"
         fi
         
         if [ ${#missing_auto_extensions[@]} -gt 0 ]; then
-            log_warning "⚠️  自动安装失败的扩展: ${missing_auto_extensions[*]}"
+            log_warning "自动安装失败的扩展: ${missing_auto_extensions[*]}"
             log_info "   这些扩展需要在宝塔面板中手动安装"
         fi
         
         if [ ${#missing_manual_extensions[@]} -gt 0 ]; then
-            log_warning "📋 需要手动安装的扩展: ${missing_manual_extensions[*]}"
+            log_warning "需要手动安装的扩展: ${missing_manual_extensions[*]}"
             log_info "   路径: 软件商店 -> PHP -> 安装扩展"
         fi
         
