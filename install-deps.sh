@@ -18,6 +18,109 @@ log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 log_warning() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 
+# 显示帮助信息
+show_help() {
+    echo "证书管理系统依赖安装脚本"
+    echo ""
+    echo "用法: $0 [选项]"
+    echo ""
+    echo "选项:"
+    echo "  -h, --help       显示此帮助信息"
+    echo "  -d, --diagnose   运行PHP扩展深度诊断（用于排查composer install扩展报错）"
+    echo ""
+    echo "示例:"
+    echo "  $0               # 正常运行依赖检查和安装"
+    echo "  $0 --diagnose    # 仅运行深度诊断"
+    echo "  $0 -d            # 简写形式的深度诊断"
+    echo ""
+}
+
+# 深度诊断PHP扩展问题（用于调试composer install扩展检测差异）
+diagnose_php_extension_issues() {
+    log_info "深度诊断PHP扩展问题..."
+    
+    if ! check_bt_panel || [ -z "$PHP_VERSION" ]; then
+        log_info "非宝塔环境，跳过深度诊断"
+        return 0
+    fi
+    
+    local php_cli="/www/server/php/$PHP_VERSION/bin/php"
+    local cli_ini="/www/server/php/$PHP_VERSION/etc/php-cli.ini"
+    local fpm_ini="/www/server/php/$PHP_VERSION/etc/php.ini"
+    local problem_exts=("bcmath" "gd" "intl" "zip" "xml")
+    
+    echo
+    log_info "=== Composer install 报错扩展深度分析 ==="
+    
+    for ext in "${problem_exts[@]}"; do
+        echo
+        log_info "检查扩展: $ext"
+        
+        # 1. CLI模式检查
+        log_info "  CLI模式 ($cli_ini):"
+        if PHPRC="$cli_ini" $php_cli -m 2>/dev/null | grep -qi "^$ext$"; then
+            log_success "    ✓ 扩展已加载"
+        else
+            log_error "    ✗ 扩展未加载"
+        fi
+        
+        # 检查扩展是否在配置中启用
+        if grep -q "extension=$ext" "$cli_ini" 2>/dev/null; then
+            log_success "    ✓ 配置中已启用 (extension=$ext)"
+        elif grep -q "extension=$ext.so" "$cli_ini" 2>/dev/null; then
+            log_success "    ✓ 配置中已启用 (extension=$ext.so)"
+        else
+            log_warning "    ! 配置中未明确启用"
+        fi
+        
+        # 2. FPM模式检查
+        log_info "  FPM模式 ($fpm_ini):"  
+        if PHPRC="$fpm_ini" $php_cli -m 2>/dev/null | grep -qi "^$ext$"; then
+            log_success "    ✓ 扩展已加载"
+        else
+            log_error "    ✗ 扩展未加载"
+        fi
+        
+        if grep -q "extension=$ext" "$fpm_ini" 2>/dev/null; then
+            log_success "    ✓ 配置中已启用 (extension=$ext)"
+        elif grep -q "extension=$ext.so" "$fpm_ini" 2>/dev/null; then
+            log_success "    ✓ 配置中已启用 (extension=$ext.so)"
+        else
+            log_warning "    ! 配置中未明确启用"
+        fi
+        
+        # 3. 检查扩展文件是否存在
+        local ext_dir="/www/server/php/$PHP_VERSION/lib/php/extensions/"
+        if [ -d "$ext_dir" ]; then
+            if find "$ext_dir" -name "*$ext*" -type f | grep -q "$ext"; then
+                log_success "    ✓ 扩展文件存在于 $ext_dir"
+                find "$ext_dir" -name "*$ext*" -type f | sed 's/^/      /'
+            else
+                log_error "    ✗ 扩展文件不存在于 $ext_dir"
+            fi
+        fi
+        
+        # 4. 检查系统包是否安装
+        local php_short="${PHP_VERSION:0:1}.${PHP_VERSION:1:1}"
+        if command -v dpkg >/dev/null 2>&1; then
+            if dpkg -l | grep -q "php${php_short}-$ext"; then
+                log_success "    ✓ 系统包已安装 (php${php_short}-$ext)"
+            else
+                log_warning "    ! 系统包可能未安装 (php${php_short}-$ext)"
+            fi
+        fi
+    done
+    
+    echo
+    log_info "=== 可能的解决方案 ==="
+    log_info "1. 如果扩展文件不存在，使用宝塔面板手动安装"
+    log_info "2. 如果扩展文件存在但未加载，检查配置文件中是否启用"
+    log_info "3. 如果CLI和FPM状态不一致，确保两个配置文件都正确"
+    log_info "4. 重启PHP-FPM服务：sudo systemctl restart php${PHP_VERSION: -2}-fpm"
+    
+    echo
+}
+
 # 版本比较函数
 version_compare() {
     local version1="$1"
@@ -748,9 +851,9 @@ handle_bt_panel() {
             fi
             
             if [ "$cli_status" = "[OK]" ] && [ "$fpm_status" = "[OK]" ]; then
-                log_success "  $func: CLI $cli_status, FPM $fpm_status"
+                log_success "  $(printf '%-15s' "$func"): CLI $cli_status, FPM $fpm_status"
             else
-                log_warning "  $func: CLI $cli_status, FPM $fpm_status (必需)"
+                log_warning "  $(printf '%-15s' "$func"): CLI $cli_status, FPM $fpm_status (必需)"
             fi
         done
         
@@ -768,9 +871,9 @@ handle_bt_panel() {
             fi
             
             if [ "$cli_status" = "[OK]" ] && [ "$fpm_status" = "[OK]" ]; then
-                log_success "  $func: CLI $cli_status, FPM $fpm_status (可选)"
+                log_success "  $(printf '%-15s' "$func"): CLI $cli_status, FPM $fpm_status (可选)"
             else
-                log_info "  $func: CLI $cli_status, FPM $fpm_status (可选)"
+                log_info "  $(printf '%-15s' "$func"): CLI $cli_status, FPM $fpm_status (可选)"
             fi
         done
         
@@ -793,7 +896,7 @@ handle_bt_panel() {
         local extensions_all_ok=true
         local total_extensions=${#required_extensions_array[@]}
         local cli_missing_count=0
-        local fmp_missing_count=0
+        local fpm_missing_count=0
         
         # 检查自动安装的扩展
         for ext in "${auto_extensions[@]}"; do
@@ -809,13 +912,13 @@ handle_bt_panel() {
             if [[ " ${fpm_missing_extensions[*]} " =~ " ${ext} " ]]; then
                 fpm_status="[MISSING]"
                 extensions_all_ok=false
-                fmp_missing_count=$((fmp_missing_count + 1))
+                fpm_missing_count=$((fpm_missing_count + 1))
             fi
             
             if [ "$cli_status" = "[OK]" ] && [ "$fpm_status" = "[OK]" ]; then
-                log_success "  $ext: CLI $cli_status, FPM $fpm_status"
+                log_success "  $(printf '%-12s' "$ext"): CLI $cli_status, FPM $fpm_status"
             else
-                log_error "  $ext: CLI $cli_status, FPM $fpm_status (自动安装失败)"
+                log_error "  $(printf '%-12s' "$ext"): CLI $cli_status, FPM $fpm_status (自动安装失败)"
             fi
         done
         
@@ -833,13 +936,13 @@ handle_bt_panel() {
             
             if [[ " ${fpm_missing_extensions[*]} " =~ " ${ext} " ]]; then
                 fpm_status="[MISSING]"
-                fmp_missing_count=$((fmp_missing_count + 1))
+                fpm_missing_count=$((fpm_missing_count + 1))
             fi
             
             if [ "$cli_status" = "[OK]" ] && [ "$fpm_status" = "[OK]" ]; then
-                log_success "  $ext: CLI $cli_status, FPM $fpm_status"
+                log_success "  $(printf '%-12s' "$ext"): CLI $cli_status, FPM $fpm_status"
             else
-                log_warning "  $ext: CLI $cli_status, FPM $fpm_status (需手动安装)"
+                log_warning "  $(printf '%-12s' "$ext"): CLI $cli_status, FPM $fpm_status (需手动安装)"
             fi
         done
         
@@ -1462,6 +1565,42 @@ show_summary() {
 
 # 主函数
 main() {
+    # 参数解析
+    local run_diagnose=false
+    
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -h|--help)
+                show_help
+                exit 0
+                ;;
+            -d|--diagnose)
+                run_diagnose=true
+                shift
+                ;;
+            *)
+                log_error "未知参数: $1"
+                show_help
+                exit 1
+                ;;
+        esac
+    done
+    
+    # 如果是诊断模式，只运行诊断
+    if [ "$run_diagnose" = true ]; then
+        log_info "运行PHP扩展深度诊断模式..."
+        echo
+        
+        # 检测系统和PHP版本
+        detect_system >/dev/null 2>&1 || true
+        if check_bt_panel; then
+            select_bt_php_version >/dev/null 2>&1 || true
+        fi
+        
+        diagnose_php_extension_issues
+        exit 0
+    fi
+    
     # 检测系统
     echo
     detect_system
@@ -1526,6 +1665,12 @@ main() {
     # 给出最终提示
     echo
     log_success "环境检查完成"
+    
+    # 如果用户需要，提供深度诊断选项
+    echo
+    log_info "如果composer install报错缺少扩展，可运行深度诊断："
+    log_info "  ./install-deps.sh --diagnose"
+    log_info "  或简写: ./install-deps.sh -d"
 }
 
 # 执行主函数
