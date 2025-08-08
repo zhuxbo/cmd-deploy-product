@@ -114,21 +114,43 @@ diagnose_php_extension_issues() {
     echo
     log_info "=== 步骤2: Composer PHP版本诊断 ==="
     
-    # 多种方法检测Composer PHP版本
-    log_info "检测Composer使用的PHP版本..."
+    # 先检查Composer是否存在
+    log_info "检测Composer命令..."
     
     if ! command -v composer >/dev/null 2>&1; then
         log_error "  ✗ 未找到Composer命令"
+        log_info "  需要先安装Composer: curl -sS https://getcomposer.org/installer | php"
+        log_info "  然后移动到系统路径: sudo mv composer.phar /usr/local/bin/composer"
         return 1
     fi
+    
+    # 获取composer路径和信息
+    local composer_path=$(which composer)
+    local composer_real_path=$(readlink -f "$composer_path" 2>/dev/null || echo "$composer_path")
+    log_info "  Composer路径: $composer_path"
+    if [ "$composer_path" != "$composer_real_path" ]; then
+        log_info "  实际路径: $composer_real_path"
+    fi
+    
+    # 检测Composer使用的PHP版本
+    log_info "检测Composer使用的PHP版本..."
     
     local composer_php_version=""
     local composer_php_match=false
     
+    # 设置PHP命令路径
+    local php_cmd="/www/server/php/$PHP_VERSION/bin/php"
+    log_info "  使用PHP执行器: $php_cmd"
+    
+    # 验证PHP版本
+    local test_php_version=$($php_cmd -r "echo PHP_VERSION;" 2>/dev/null)
+    log_info "  PHP执行器版本: $test_php_version"
+    
     # 方法1: composer --version
     log_info "  方法1: composer --version"
     local composer_output=""
-    if composer_output=$(timeout 10s composer --version 2>/dev/null); then
+    # 使用宝塔PHP明确执行composer
+    if composer_output=$(timeout 10s $php_cmd $(which composer) --version 2>/dev/null); then
         log_info "    Composer输出: $composer_output"
         
         # 尝试多种格式提取PHP版本
@@ -163,7 +185,7 @@ diagnose_php_extension_issues() {
     # 方法2: composer diagnose (如果第一个方法失败)
     if [ "$composer_php_match" = false ]; then
         log_info "  方法2: composer diagnose"
-        if composer_diag=$(timeout 30s composer diagnose 2>/dev/null | grep -i "php version"); then
+        if composer_diag=$(timeout 30s $php_cmd $(which composer) diagnose 2>/dev/null | grep -i "php version"); then
             log_info "    诊断信息: $composer_diag"
         else
             log_warning "    ! Composer诊断超时(30秒)，可能网络或系统问题"
@@ -175,19 +197,21 @@ diagnose_php_extension_issues() {
     local default_php_path=""
     if command -v php >/dev/null 2>&1; then
         default_php_path=$(which php)
+        # 解析软链接获取真实路径
+        local real_php_path=$(readlink -f "$default_php_path" 2>/dev/null || echo "$default_php_path")
         local default_php_version=""
         if default_php_version=$(timeout 3s php -r "echo PHP_VERSION;" 2>/dev/null); then
-            if [[ "$default_php_path" == *"/www/server/php"* ]]; then
+            if [[ "$real_php_path" == *"/www/server/php"* ]]; then
                 if version_compare "$default_php_version" "$minimum_php_version"; then
                     log_success "    ✓ 系统默认PHP配置正确"
-                    log_info "    路径: $default_php_path，版本: $default_php_version"
+                    log_info "    路径: $default_php_path -> $real_php_path，版本: $default_php_version"
                 else
                     log_warning "    ! 系统默认PHP版本过低"
-                    log_info "    路径: $default_php_path，版本: $default_php_version，需要: >= $minimum_php_version"
+                    log_info "    路径: $default_php_path -> $real_php_path，版本: $default_php_version，需要: >= $minimum_php_version"
                 fi
             else
                 log_warning "    ! 系统默认PHP不是宝塔PHP"
-                log_info "    当前路径: $default_php_path，版本: $default_php_version"
+                log_info "    当前路径: $default_php_path -> $real_php_path，版本: $default_php_version"
             fi
         else
             log_warning "    ! 无法获取系统默认PHP版本"
@@ -205,7 +229,8 @@ diagnose_php_extension_issues() {
     local platform_output=""
     local platform_success=false
     
-    if platform_output=$(timeout 60s composer show --platform 2>/dev/null); then
+    # 使用宝塔PHP执行composer show
+    if platform_output=$(timeout 60s $php_cmd $(which composer) show --platform 2>/dev/null); then
         platform_success=true
         log_success "  ✓ Composer平台检测成功"
         
