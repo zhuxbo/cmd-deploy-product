@@ -246,15 +246,31 @@ restore_preserve_files() {
     
     # 恢复后端文件
     if [ -d "$TEMP_PRESERVE_DIR/backend" ]; then
-        cp -r "$TEMP_PRESERVE_DIR/backend"/* "$SITE_ROOT/backend/" 2>/dev/null || true
+        # 使用rsync或cp -a保持目录结构和权限
+        if command -v rsync >/dev/null 2>&1; then
+            rsync -a "$TEMP_PRESERVE_DIR/backend/" "$SITE_ROOT/backend/"
+        else
+            cp -a "$TEMP_PRESERVE_DIR/backend/." "$SITE_ROOT/backend/" 2>/dev/null || true
+        fi
         log_info "后端文件已恢复"
+        
+        # 验证关键文件
+        if [ -f "$SITE_ROOT/backend/.env" ]; then
+            log_success "✓ .env 文件已成功恢复"
+        else
+            log_error "✗ .env 文件恢复失败！"
+        fi
     fi
     
     # 恢复前端文件
     if [ -d "$TEMP_PRESERVE_DIR/frontend" ]; then
         for component in admin user easy; do
             if [ -d "$TEMP_PRESERVE_DIR/frontend/$component" ]; then
-                cp -r "$TEMP_PRESERVE_DIR/frontend/$component"/* "$SITE_ROOT/frontend/$component/" 2>/dev/null || true
+                if command -v rsync >/dev/null 2>&1; then
+                    rsync -a "$TEMP_PRESERVE_DIR/frontend/$component/" "$SITE_ROOT/frontend/$component/"
+                else
+                    cp -a "$TEMP_PRESERVE_DIR/frontend/$component/." "$SITE_ROOT/frontend/$component/" 2>/dev/null || true
+                fi
                 log_info "前端 $component 文件已恢复"
             fi
         done
@@ -365,10 +381,21 @@ optimize_backend() {
         $PHP_CMD artisan view:clear
         $PHP_CMD artisan optimize
         
-        # 删除安装文件（如果存在）
+        # 删除安装文件和目录（如果存在）
         if [ -f "public/install.php" ]; then
             rm -f "public/install.php"
-            log_info "已删除安装文件"
+            log_info "已删除 install.php"
+        fi
+        
+        if [ -d "public/install-assets" ]; then
+            rm -rf "public/install-assets"
+            log_info "已删除 install-assets 目录"
+        fi
+        
+        # 删除其他可能的安装相关文件
+        if [ -f "public/install-assets.zip" ]; then
+            rm -f "public/install-assets.zip"
+            log_info "已删除 install-assets.zip"
         fi
         
         cd "$SCRIPT_DIR"
@@ -390,95 +417,82 @@ update_nginx_config() {
 set_permissions() {
     log_info "设置文件权限..."
     
-    # 获取站点目录的所有者信息
-    SITE_OWNER=$(stat -c "%U" "$SITE_ROOT")
-    SITE_GROUP=$(stat -c "%G" "$SITE_ROOT")
-    
-    log_info "站点目录所有者: $SITE_OWNER:$SITE_GROUP"
-    log_info "站点目录即为Web用户目录，storage和cache保持一致权限"
+    # 检测宝塔环境，确定正确的Web用户
+    if check_bt_panel; then
+        # 宝塔环境固定使用www用户
+        SITE_OWNER="www"
+        SITE_GROUP="www"
+        log_info "检测到宝塔环境，使用 www:www 作为文件所有者"
+    else
+        # 非宝塔环境，使用站点目录的当前所有者
+        SITE_OWNER=$(stat -c "%U" "$SITE_ROOT")
+        SITE_GROUP=$(stat -c "%G" "$SITE_ROOT")
+        log_info "使用站点目录所有者: $SITE_OWNER:$SITE_GROUP"
+    fi
     
     # 设置后端权限
     if [ -d "$SITE_ROOT/backend" ] && ([ "$UPDATE_MODULE" = "all" ] || [ "$UPDATE_MODULE" = "api" ]); then
         log_info "设置后端目录权限..."
         
-        # 整体保持与站点目录一致的所有者
-        sudo chown -R "$SITE_OWNER:$SITE_GROUP" "$SITE_ROOT/backend"
+        # 整体设置所有者（快速操作）
+        sudo chown -R "$SITE_OWNER:$SITE_GROUP" "$SITE_ROOT/backend" 2>/dev/null
         
         # 设置基础目录权限为755
-        sudo chmod 755 "$SITE_ROOT/backend"
+        sudo chmod 755 "$SITE_ROOT/backend" 2>/dev/null
         
-        # 代码文件设置为644（只读）- 合并多个find命令提高性能
+        # 代码文件设置为644（只读）- 简化版本
         find "$SITE_ROOT/backend" -type f \( \
             -name "*.php" -o -name "*.js" -o -name "*.css" -o -name "*.xml" -o \
             -name "*.yml" -o -name "*.yaml" -o -name "*.md" -o -name "*.txt" -o \
-            -name ".env*" \
+            -name ".env*" -o -name "*.json" \
         \) -not -path "$SITE_ROOT/backend/storage/*" -not -path "$SITE_ROOT/backend/bootstrap/cache/*" \
-        -exec sudo chmod 644 {} +
-        
-        # JSON文件特殊处理 - 某些可能需要写入权限
-        find "$SITE_ROOT/backend" -type f -name "*.json" \
-        -not -path "$SITE_ROOT/backend/storage/*" -not -path "$SITE_ROOT/backend/bootstrap/cache/*" \
-        -exec sudo chmod 644 {} +
+        -exec sudo chmod 644 {} + 2>/dev/null
         
         # Laravel 特殊文件处理
-        if [ -f "$SITE_ROOT/backend/artisan" ]; then
-            sudo chmod 755 "$SITE_ROOT/backend/artisan"  # artisan需要执行权限
-        fi
+        [ -f "$SITE_ROOT/backend/artisan" ] && sudo chmod 755 "$SITE_ROOT/backend/artisan" 2>/dev/null
         
-        # Laravel 需要写入权限的目录 - 保持与站点目录一致的用户
+        # Laravel 需要写入权限的目录
         if [ -d "$SITE_ROOT/backend/storage" ]; then
-            sudo chown -R "$SITE_OWNER:$SITE_GROUP" "$SITE_ROOT/backend/storage"
-            sudo chmod -R 775 "$SITE_ROOT/backend/storage"
-            # storage内的文件设置为664
-            find "$SITE_ROOT/backend/storage" -type f -exec sudo chmod 664 {} +
+            sudo chmod -R 775 "$SITE_ROOT/backend/storage" 2>/dev/null
+            find "$SITE_ROOT/backend/storage" -type f -exec sudo chmod 664 {} + 2>/dev/null
         fi
         
-        if [ -d "$SITE_ROOT/backend/bootstrap/cache" ]; then
-            sudo chown -R "$SITE_OWNER:$SITE_GROUP" "$SITE_ROOT/backend/bootstrap/cache"
-            sudo chmod -R 775 "$SITE_ROOT/backend/bootstrap/cache"
-        fi
+        [ -d "$SITE_ROOT/backend/bootstrap/cache" ] && sudo chmod -R 775 "$SITE_ROOT/backend/bootstrap/cache" 2>/dev/null
         
         # 其他目录设置为755
-        find "$SITE_ROOT/backend" -type d -not -path "$SITE_ROOT/backend/storage*" -not -path "$SITE_ROOT/backend/bootstrap/cache*" -exec sudo chmod 755 {} +
+        find "$SITE_ROOT/backend" -type d -not -path "$SITE_ROOT/backend/storage*" -not -path "$SITE_ROOT/backend/bootstrap/cache*" -exec sudo chmod 755 {} + 2>/dev/null
         
         log_info "后端权限设置完成"
     fi
     
-    # 设置前端权限
-    for component in admin user easy; do
-        if [ -d "$SITE_ROOT/frontend/$component" ] && ([ "$UPDATE_MODULE" = "all" ] || [ "$UPDATE_MODULE" = "$component" ]); then
-            log_info "设置 $component 前端权限..."
-            
-            # 前端保持与站点目录一致的所有者
-            sudo chown -R "$SITE_OWNER:$SITE_GROUP" "$SITE_ROOT/frontend/$component"
-            
-            # 目录权限755
-            find "$SITE_ROOT/frontend/$component" -type d -exec sudo chmod 755 {} +
-            
-            # 代码文件设置为644（只读）
-            find "$SITE_ROOT/frontend/$component" -type f \( \
-                -name "*.html" -o -name "*.js" -o -name "*.css" -o -name "*.json" -o \
-                -name "*.svg" -o -name "*.png" -o -name "*.jpg" -o -name "*.jpeg" -o \
-                -name "*.gif" -o -name "*.ico" -o -name "*.xml" -o -name "*.txt" -o -name "*.md" \
-            \) -exec sudo chmod 644 {} +
+    # 设置前端权限（简化版）
+    if [ -d "$SITE_ROOT/frontend" ] && [ "$UPDATE_MODULE" != "api" ] && [ "$UPDATE_MODULE" != "nginx" ]; then
+        if [ "$UPDATE_MODULE" = "all" ]; then
+            # 批量处理所有前端
+            log_info "设置前端权限..."
+            sudo chown -R "$SITE_OWNER:$SITE_GROUP" "$SITE_ROOT/frontend" 2>/dev/null
+            find "$SITE_ROOT/frontend" -type d -exec sudo chmod 755 {} + 2>/dev/null
+            find "$SITE_ROOT/frontend" -type f -exec sudo chmod 644 {} + 2>/dev/null
+        else
+            # 单个前端组件
+            if [ -d "$SITE_ROOT/frontend/$UPDATE_MODULE" ]; then
+                log_info "设置 $UPDATE_MODULE 前端权限..."
+                sudo chown -R "$SITE_OWNER:$SITE_GROUP" "$SITE_ROOT/frontend/$UPDATE_MODULE" 2>/dev/null
+                find "$SITE_ROOT/frontend/$UPDATE_MODULE" -type d -exec sudo chmod 755 {} + 2>/dev/null
+                find "$SITE_ROOT/frontend/$UPDATE_MODULE" -type f -exec sudo chmod 644 {} + 2>/dev/null
+            fi
         fi
-    done
+    fi
     
     # 设置nginx目录权限
     if ([ "$UPDATE_MODULE" = "all" ] || [ "$UPDATE_MODULE" = "nginx" ]) && [ -d "$SITE_ROOT/nginx" ]; then
         log_info "设置nginx目录权限..."
-        sudo chown -R "$SITE_OWNER:$SITE_GROUP" "$SITE_ROOT/nginx"
-        sudo chmod -R 755 "$SITE_ROOT/nginx"
-        find "$SITE_ROOT/nginx" -type f -exec sudo chmod 644 {} +
+        sudo chown -R "$SITE_OWNER:$SITE_GROUP" "$SITE_ROOT/nginx" 2>/dev/null
+        sudo chmod -R 755 "$SITE_ROOT/nginx" 2>/dev/null
+        find "$SITE_ROOT/nginx" -type f -exec sudo chmod 644 {} + 2>/dev/null
     fi
     
-    log_success "权限设置完成"
-    log_info "- 代码文件: 644 (只读)"
-    log_info "- 目录: 755"
-    if [ "$UPDATE_MODULE" = "all" ] || [ "$UPDATE_MODULE" = "api" ]; then
-        log_info "- Laravel写入目录: $SITE_OWNER:$SITE_GROUP 775"
-    fi
-    log_info "- 所有文件: $SITE_OWNER:$SITE_GROUP"
+    log_success "权限设置完成（所有者: $SITE_OWNER:$SITE_GROUP）"
 }
 
 # 重载服务
