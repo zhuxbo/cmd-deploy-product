@@ -90,13 +90,39 @@ diagnose_php_extension_issues() {
         fi
         
         # 3. 检查扩展文件是否存在
-        local ext_dir="/www/server/php/$PHP_VERSION/lib/php/extensions/"
-        if [ -d "$ext_dir" ]; then
-            if find "$ext_dir" -name "*$ext*" -type f | grep -q "$ext"; then
-                log_success "    ✓ 扩展文件存在于 $ext_dir"
-                find "$ext_dir" -name "*$ext*" -type f | sed 's/^/      /'
-            else
-                log_error "    ✗ 扩展文件不存在于 $ext_dir"
+        log_info "  扩展文件检查:"
+        local ext_found=false
+        
+        # 检查多个可能的扩展目录
+        local ext_dirs=(
+            "/www/server/php/$PHP_VERSION/lib/php/extensions"
+            "/usr/lib/php"
+            "/usr/lib/php/modules"
+            "/usr/lib/php/extensions"
+        )
+        
+        # 获取PHP实际扩展目录
+        local actual_ext_dir=$($php_cli -r "echo ini_get('extension_dir');" 2>/dev/null)
+        if [ -n "$actual_ext_dir" ] && [ "$actual_ext_dir" != "" ]; then
+            ext_dirs+=("$actual_ext_dir")
+        fi
+        
+        for dir in "${ext_dirs[@]}"; do
+            if [ -d "$dir" ]; then
+                if find "$dir" -name "*$ext*" -type f 2>/dev/null | grep -q "$ext"; then
+                    log_success "    ✓ 扩展文件存在于 $dir"
+                    find "$dir" -name "*$ext*" -type f 2>/dev/null | sed 's/^/      /'
+                    ext_found=true
+                    break
+                fi
+            fi
+        done
+        
+        if [ "$ext_found" = false ]; then
+            log_warning "    ! 扩展文件未找到（可能是内置扩展）"
+            # 检查是否是PHP内置扩展
+            if echo "bcmath ctype dom json libxml openssl pcre spl standard" | grep -q "$ext"; then
+                log_info "    → $ext 通常是PHP核心内置扩展"
             fi
         fi
         
@@ -112,11 +138,38 @@ diagnose_php_extension_issues() {
     done
     
     echo
+    log_info "=== Composer环境模拟测试 ==="
+    
+    # 检查composer运行时PHP环境
+    if command -v composer >/dev/null 2>&1; then
+        log_info "检查composer实际使用的PHP环境:"
+        
+        # 获取composer使用的PHP版本和扩展
+        local composer_php_version=$(composer --version 2>&1 | grep -o 'PHP [0-9]\+\.[0-9]\+\.[0-9]\+' | head -1)
+        log_info "  Composer使用的PHP版本: $composer_php_version"
+        
+        # 测试composer能否检测到扩展
+        for ext in "${problem_exts[@]}"; do
+            # 模拟composer的扩展检查方式
+            if timeout 10s composer show --platform 2>/dev/null | grep -q "ext-$ext"; then
+                log_success "  ✓ Composer能检测到扩展: $ext"
+            else
+                log_error "  ✗ Composer无法检测到扩展: $ext"
+                log_info "    → 这可能是composer install报错的原因"
+            fi
+        done
+    else
+        log_warning "composer命令不可用"
+    fi
+    
+    echo
     log_info "=== 可能的解决方案 ==="
-    log_info "1. 如果扩展文件不存在，使用宝塔面板手动安装"
-    log_info "2. 如果扩展文件存在但未加载，检查配置文件中是否启用"
-    log_info "3. 如果CLI和FPM状态不一致，确保两个配置文件都正确"
+    log_info "1. 如果是内置扩展但composer检测不到，可能是PHP编译配置问题"
+    log_info "2. 对于缺失的扩展文件，使用宝塔面板手动安装对应扩展"
+    log_info "3. 如果CLI和FPM状态不一致，确保两个配置文件都正确"  
     log_info "4. 重启PHP-FPM服务：sudo systemctl restart php${PHP_VERSION: -2}-fpm"
+    log_info "5. 如果问题持续，可以在composer.json中忽略平台检查："
+    log_info "   composer install --ignore-platform-reqs"
     
     echo
 }
