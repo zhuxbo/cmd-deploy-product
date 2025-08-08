@@ -347,12 +347,15 @@ deploy_new_files() {
                 if [ -d "$SOURCE_PATH/$dir" ]; then
                     log_info "更新 $dir..."
                     rm -rf "$SITE_ROOT/$dir"
-                    cp -r "$SOURCE_PATH/$dir" "$SITE_ROOT/"
+                    # 使用cp -a保持文件属性
+                    cp -a "$SOURCE_PATH/$dir" "$SITE_ROOT/"
                 fi
             done
             
             # 复制构建信息文件
-            cp "$SOURCE_PATH/info.json" "$SITE_ROOT/" 2>/dev/null || true
+            if [ -f "$SOURCE_PATH/info.json" ]; then
+                cp "$SOURCE_PATH/info.json" "$SITE_ROOT/"
+            fi
             ;;
             
         api)
@@ -360,7 +363,7 @@ deploy_new_files() {
             if [ -d "$SOURCE_PATH/backend" ]; then
                 log_info "更新后端..."
                 rm -rf "$SITE_ROOT/backend"
-                cp -r "$SOURCE_PATH/backend" "$SITE_ROOT/"
+                cp -a "$SOURCE_PATH/backend" "$SITE_ROOT/"
             fi
             ;;
             
@@ -369,7 +372,7 @@ deploy_new_files() {
             if [ -d "$SOURCE_PATH/nginx" ]; then
                 log_info "更新 Nginx 配置..."
                 rm -rf "$SITE_ROOT/nginx"
-                cp -r "$SOURCE_PATH/nginx" "$SITE_ROOT/"
+                cp -a "$SOURCE_PATH/nginx" "$SITE_ROOT/"
             fi
             ;;
             
@@ -379,7 +382,7 @@ deploy_new_files() {
                 log_info "更新 $UPDATE_MODULE 前端..."
                 rm -rf "$SITE_ROOT/frontend/$UPDATE_MODULE"
                 mkdir -p "$SITE_ROOT/frontend"
-                cp -r "$SOURCE_PATH/frontend/$UPDATE_MODULE" "$SITE_ROOT/frontend/"
+                cp -a "$SOURCE_PATH/frontend/$UPDATE_MODULE" "$SITE_ROOT/frontend/"
             fi
             ;;
     esac
@@ -406,21 +409,38 @@ optimize_backend() {
             done
         fi
         
-        # 优化 Composer 自动加载（使用站点所有者执行）
+        # 优化 Composer 自动加载（使用正确的站点所有者执行）
         if command -v composer &> /dev/null; then
             log_info "优化 Composer 自动加载..."
-            # 获取站点所有者
-            SITE_OWNER=$(stat -c "%U" "$SITE_ROOT")
-            if sudo -u "$SITE_OWNER" composer dump-autoload --optimize --no-dev 2>/dev/null; then
-                log_success "自动加载优化完成（包发现已自动执行）"
+            # 获取正确的站点所有者
+            if check_bt_panel; then
+                COMPOSER_USER="www"
             else
-                log_warning "自动加载优化失败，但不影响应用运行"
-                log_info "Laravel 将使用基础自动加载器，性能可能稍有影响"
-                echo
-                log_info "如需手动尝试优化，请执行以下命令："
-                log_info "cd $SITE_ROOT/backend"
-                log_info "sudo -u $SITE_OWNER composer dump-autoload --optimize --no-dev"
-                echo
+                COMPOSER_USER=$(stat -c "%U" "$SITE_ROOT")
+            fi
+            
+            # 确保backend目录权限正确后再执行composer
+            if [ "$EUID" -eq 0 ]; then
+                # 以root运行时，使用sudo切换到正确用户
+                if sudo -u "$COMPOSER_USER" composer dump-autoload --optimize --no-dev 2>/dev/null; then
+                    log_success "自动加载优化完成（包发现已自动执行）"
+                else
+                    log_warning "自动加载优化失败，但不影响应用运行"
+                    log_info "Laravel 将使用基础自动加载器，性能可能稍有影响"
+                    echo
+                    log_info "如需手动尝试优化，请执行以下命令："
+                    log_info "cd $SITE_ROOT/backend"
+                    log_info "sudo -u $COMPOSER_USER composer dump-autoload --optimize --no-dev"
+                    echo
+                fi
+            else
+                # 非root用户直接执行
+                if composer dump-autoload --optimize --no-dev 2>/dev/null; then
+                    log_success "自动加载优化完成（包发现已自动执行）"
+                else
+                    log_warning "自动加载优化失败，但不影响应用运行"
+                    log_info "Laravel 将使用基础自动加载器"
+                fi
             fi
         else
             log_warning "Composer 未安装，跳过自动加载优化"
@@ -432,7 +452,6 @@ optimize_backend() {
         $PHP_CMD artisan cache:clear
         $PHP_CMD artisan config:clear
         $PHP_CMD artisan route:clear
-        $PHP_CMD artisan view:clear
         $PHP_CMD artisan optimize
         
         # 删除安装文件和目录（如果存在）
