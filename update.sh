@@ -194,9 +194,13 @@ save_preserve_files() {
     TEMP_PRESERVE_DIR="/tmp/cert_manager_preserve_$$"
     mkdir -p "$TEMP_PRESERVE_DIR"
     
+    local saved_count=0
+    local failed_count=0
+    
     # 保存后端文件
     if [ "$UPDATE_MODULE" = "all" ] || [ "$UPDATE_MODULE" = "api" ]; then
         if [ -d "$SITE_ROOT/backend" ]; then
+            log_info "检查后端需要保护的文件..."
             # 读取需要保留的后端文件
             BACKEND_FILES=$(jq -r '.preserve_files.backend[]' "$CONFIG_FILE" 2>/dev/null)
             if [ -n "$BACKEND_FILES" ]; then
@@ -205,9 +209,16 @@ save_preserve_files() {
                         # 创建目标目录
                         TARGET_DIR="$TEMP_PRESERVE_DIR/backend/$(dirname "$file")"
                         mkdir -p "$TARGET_DIR"
-                        # 复制文件或目录
-                        cp -r "$SITE_ROOT/backend/$file" "$TARGET_DIR/"
-                        log_info "保存: backend/$file"
+                        # 使用cp -a保持权限和属性
+                        if cp -a "$SITE_ROOT/backend/$file" "$TARGET_DIR/"; then
+                            log_success "  ✓ 保存: backend/$file"
+                            saved_count=$((saved_count + 1))
+                        else
+                            log_error "  ✗ 保存失败: backend/$file"
+                            failed_count=$((failed_count + 1))
+                        fi
+                    else
+                        log_warning "  ! 不存在: backend/$file"
                     fi
                 done <<< "$BACKEND_FILES"
             fi
@@ -218,13 +229,21 @@ save_preserve_files() {
     for component in admin user easy; do
         if [ "$UPDATE_MODULE" = "all" ] || [ "$UPDATE_MODULE" = "$component" ]; then
             if [ -d "$SITE_ROOT/frontend/$component" ]; then
+                log_info "检查 $component 前端需要保护的文件..."
                 PRESERVE_FILES=$(jq -r ".preserve_files.frontend.$component[]" "$CONFIG_FILE" 2>/dev/null)
                 if [ -n "$PRESERVE_FILES" ]; then
                     mkdir -p "$TEMP_PRESERVE_DIR/frontend/$component"
                     while IFS= read -r file; do
-                        if [ -f "$SITE_ROOT/frontend/$component/$file" ]; then
-                            cp "$SITE_ROOT/frontend/$component/$file" "$TEMP_PRESERVE_DIR/frontend/$component/"
-                            log_info "保存: frontend/$component/$file"
+                        if [ -e "$SITE_ROOT/frontend/$component/$file" ]; then
+                            if cp -a "$SITE_ROOT/frontend/$component/$file" "$TEMP_PRESERVE_DIR/frontend/$component/"; then
+                                log_success "  ✓ 保存: frontend/$component/$file"
+                                saved_count=$((saved_count + 1))
+                            else
+                                log_error "  ✗ 保存失败: frontend/$component/$file"
+                                failed_count=$((failed_count + 1))
+                            fi
+                        else
+                            log_warning "  ! 不存在: frontend/$component/$file"
                         fi
                     done <<< "$PRESERVE_FILES"
                 fi
@@ -232,7 +251,11 @@ save_preserve_files() {
         fi
     done
     
-    log_success "文件保存完成"
+    if [ $failed_count -eq 0 ]; then
+        log_success "文件保存完成（共保存 $saved_count 个文件/目录）"
+    else
+        log_warning "文件保存完成（成功: $saved_count, 失败: $failed_count）"
+    fi
 }
 
 # 恢复保留的文件
@@ -244,21 +267,31 @@ restore_preserve_files() {
         return
     fi
     
+    local restored_count=0
+    local failed_count=0
+    
     # 恢复后端文件
     if [ -d "$TEMP_PRESERVE_DIR/backend" ]; then
+        log_info "恢复后端保护文件..."
         # 使用rsync或cp -a保持目录结构和权限
         if command -v rsync >/dev/null 2>&1; then
             rsync -a "$TEMP_PRESERVE_DIR/backend/" "$SITE_ROOT/backend/"
         else
             cp -a "$TEMP_PRESERVE_DIR/backend/." "$SITE_ROOT/backend/" 2>/dev/null || true
         fi
-        log_info "后端文件已恢复"
         
-        # 验证关键文件
-        if [ -f "$SITE_ROOT/backend/.env" ]; then
-            log_success "✓ .env 文件已成功恢复"
-        else
-            log_error "✗ .env 文件恢复失败！"
+        # 验证关键文件恢复情况
+        BACKEND_FILES=$(jq -r '.preserve_files.backend[]' "$CONFIG_FILE" 2>/dev/null)
+        if [ -n "$BACKEND_FILES" ]; then
+            while IFS= read -r file; do
+                if [ -e "$SITE_ROOT/backend/$file" ]; then
+                    log_success "  ✓ 已恢复: backend/$file"
+                    restored_count=$((restored_count + 1))
+                else
+                    log_error "  ✗ 恢复失败: backend/$file"
+                    failed_count=$((failed_count + 1))
+                fi
+            done <<< "$BACKEND_FILES"
         fi
     fi
     
@@ -266,17 +299,38 @@ restore_preserve_files() {
     if [ -d "$TEMP_PRESERVE_DIR/frontend" ]; then
         for component in admin user easy; do
             if [ -d "$TEMP_PRESERVE_DIR/frontend/$component" ]; then
+                log_info "恢复 $component 前端保护文件..."
                 if command -v rsync >/dev/null 2>&1; then
                     rsync -a "$TEMP_PRESERVE_DIR/frontend/$component/" "$SITE_ROOT/frontend/$component/"
                 else
                     cp -a "$TEMP_PRESERVE_DIR/frontend/$component/." "$SITE_ROOT/frontend/$component/" 2>/dev/null || true
                 fi
-                log_info "前端 $component 文件已恢复"
+                
+                # 验证文件恢复情况
+                PRESERVE_FILES=$(jq -r ".preserve_files.frontend.$component[]" "$CONFIG_FILE" 2>/dev/null)
+                if [ -n "$PRESERVE_FILES" ]; then
+                    while IFS= read -r file; do
+                        if [ -e "$SITE_ROOT/frontend/$component/$file" ]; then
+                            log_success "  ✓ 已恢复: frontend/$component/$file"
+                            restored_count=$((restored_count + 1))
+                        else
+                            log_error "  ✗ 恢复失败: frontend/$component/$file"
+                            failed_count=$((failed_count + 1))
+                        fi
+                    done <<< "$PRESERVE_FILES"
+                fi
             fi
         done
     fi
     
-    log_success "文件恢复完成"
+    # 显示恢复结果统计
+    if [ $failed_count -eq 0 ]; then
+        log_success "文件恢复完成（共恢复 $restored_count 个文件/目录）"
+    else
+        log_error "文件恢复有错误（成功: $restored_count, 失败: $failed_count）"
+        log_error "请检查上述失败的文件，可能需要手动恢复"
+    fi
+    
     log_info "临时文件将在脚本结束时自动清理"
 }
 
@@ -390,12 +444,6 @@ optimize_backend() {
         if [ -d "public/install-assets" ]; then
             rm -rf "public/install-assets"
             log_info "已删除 install-assets 目录"
-        fi
-        
-        # 删除其他可能的安装相关文件
-        if [ -f "public/install-assets.zip" ]; then
-            rm -f "public/install-assets.zip"
-            log_info "已删除 install-assets.zip"
         fi
         
         cd "$SCRIPT_DIR"
