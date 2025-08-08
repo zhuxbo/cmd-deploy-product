@@ -121,18 +121,21 @@ diagnose_php_extension_issues() {
         fi
     fi
     
-    # 方法3: 检查composer wrapper状态
-    log_info "  方法3: 检查Composer修复状态"
-    if [ -f "/usr/local/bin/composer-bt" ]; then
-        log_success "    ✓ Composer宝塔修复包装器存在"
-        if [ -x "/usr/local/bin/composer-bt" ]; then
-            log_success "    ✓ 修复包装器可执行"
-            # 尝试修复Composer问题
-            log_info "    尝试使用修复后的Composer..."
-            fix_bt_composer_php
+    # 方法3: 检查系统默认PHP CLI设置
+    log_info "  方法3: 检查系统默认PHP CLI"
+    local default_php_path=""
+    if command -v php >/dev/null 2>&1; then
+        default_php_path=$(which php)
+        if [[ "$default_php_path" == *"/www/server/php"* ]]; then
+            log_success "    ✓ 系统默认PHP已设置为宝塔PHP"
+            log_info "    路径: $default_php_path"
+        else
+            log_warning "    ! 系统默认PHP不是宝塔PHP"
+            log_info "    当前路径: $default_php_path"
+            log_info "    建议通过宝塔面板设置默认PHP CLI版本"
         fi
     else
-        log_info "    ! 无修复包装器，可能需要创建"
+        log_warning "    ! 未找到系统默认php命令"
     fi
     
     echo
@@ -246,7 +249,7 @@ diagnose_php_extension_issues() {
             echo
             log_info "建议的解决方案:"
             echo "1. [推荐] 卸载冲突的系统PHP包"
-            echo "2. 创建Composer宝塔PHP包装器"
+            echo "2. 设置系统默认PHP CLI为宝塔PHP"
             echo "3. 设置环境变量优先级"
             echo "4. 忽略问题继续"
             echo
@@ -264,9 +267,9 @@ diagnose_php_extension_issues() {
                     fi
                     ;;
                 2)
-                    log_info "执行方案2: 创建Composer包装器..."
+                    log_info "执行方案2: 设置系统默认PHP CLI..."
                     fix_bt_composer_php
-                    log_info "包装器已创建，请重新运行诊断验证"
+                    log_info "请重新运行诊断验证配置是否生效"
                     ;;
                 3)
                     log_info "执行方案3: 手动设置环境变量"
@@ -366,165 +369,6 @@ check_bt_panel() {
         return 0  # 是宝塔环境
     fi
     return 1  # 非宝塔环境
-}
-
-# 检测系统类型
-detect_system() {
-        log_info "    检查配置文件启用状态..."
-        if timeout 3s grep -q "extension=$ext" "$cli_ini" 2>/dev/null; then
-            log_success "    ✓ 配置中已启用 (extension=$ext)"
-        elif timeout 3s grep -q "extension=$ext.so" "$cli_ini" 2>/dev/null; then
-            log_success "    ✓ 配置中已启用 (extension=$ext.so)"
-        else
-            log_warning "    ! 配置中未明确启用或检查超时"
-        fi
-        
-        # 2. FPM模式检查
-        log_info "  FPM模式检查开始..."  
-        log_info "    配置文件: $fpm_ini"
-        
-        # 使用超时检查扩展加载（5秒超时）
-        log_info "    检查扩展是否已加载..."
-        if timeout 5s bash -c "PHPRC='$fpm_ini' '$php_cli' -m 2>/dev/null | grep -qi '^$ext$'" 2>/dev/null; then
-            log_success "    ✓ 扩展已加载"
-        else
-            log_error "    ✗ 扩展未加载或检查超时"
-        fi
-        
-        # 检查扩展是否在配置中启用（使用超时）
-        log_info "    检查配置文件启用状态..."
-        if timeout 3s grep -q "extension=$ext" "$fpm_ini" 2>/dev/null; then
-            log_success "    ✓ 配置中已启用 (extension=$ext)"
-        elif timeout 3s grep -q "extension=$ext.so" "$fpm_ini" 2>/dev/null; then
-            log_success "    ✓ 配置中已启用 (extension=$ext.so)"
-        else
-            log_warning "    ! 配置中未明确启用或检查超时"
-        fi
-        
-        # 3. 检查扩展文件是否存在
-        log_info "  扩展文件检查:"
-        local ext_found=false
-        
-        # 检查多个可能的扩展目录
-        local ext_dirs=(
-            "/www/server/php/$PHP_VERSION/lib/php/extensions"
-            "/usr/lib/php"
-            "/usr/lib/php/modules"
-            "/usr/lib/php/extensions"
-        )
-        
-        # 获取PHP实际扩展目录（使用超时）
-        log_info "    获取PHP扩展目录..."
-        local actual_ext_dir=""
-        if actual_ext_dir=$(timeout 5s $php_cli -r "echo ini_get('extension_dir');" 2>/dev/null); then
-            if [ -n "$actual_ext_dir" ] && [ "$actual_ext_dir" != "" ]; then
-                ext_dirs+=("$actual_ext_dir")
-                log_info "    实际扩展目录: $actual_ext_dir"
-            fi
-        else
-            log_warning "    获取扩展目录超时或失败"
-        fi
-        
-        # 搜索扩展文件（使用超时和更高效的搜索）
-        log_info "    搜索扩展文件..."
-        for dir in "${ext_dirs[@]}"; do
-            log_info "    检查目录: $dir"
-            if [ -d "$dir" ]; then
-                # 使用更短的超时进行文件搜索，优先检查常见文件名
-                local found_files=""
-                if found_files=$(timeout 5s find "$dir" -maxdepth 2 -name "*$ext*" -type f 2>/dev/null | head -3); then
-                    if [ -n "$found_files" ]; then
-                        log_success "    ✓ 扩展文件存在于 $dir"
-                        echo "$found_files" | sed 's/^/      /'
-                        ext_found=true
-                        break
-                    fi
-                else
-                    log_info "    搜索超时，跳过此目录"
-                fi
-            else
-                log_info "    目录不存在: $dir"
-            fi
-        done
-        
-        if [ "$ext_found" = false ]; then
-            log_warning "    ! 扩展文件未找到（可能是内置扩展）"
-            # 检查是否是PHP内置扩展
-            if echo "bcmath ctype dom json libxml openssl pcre spl standard" | grep -q "$ext"; then
-                log_info "    → $ext 通常是PHP核心内置扩展"
-            fi
-        fi
-        
-        # 4. 检查系统包是否安装
-        local php_short="${PHP_VERSION:0:1}.${PHP_VERSION:1:1}"
-        if command -v dpkg >/dev/null 2>&1; then
-            if dpkg -l | grep -q "php${php_short}-$ext"; then
-                log_success "    ✓ 系统包已安装 (php${php_short}-$ext)"
-            else
-                log_warning "    ! 系统包可能未安装 (php${php_short}-$ext)"
-            fi
-        fi
-        
-        # 递增计数器
-        ext_count=$((ext_count + 1))
-    
-    echo
-    log_info "=== Composer环境模拟测试 ==="
-    
-    # 先尝试修复Composer PHP版本问题
-    log_info "尝试修复Composer PHP版本..."
-    fix_bt_composer_php
-    
-    # 检查composer运行时PHP环境
-    log_info "开始Composer环境检查..."
-    if command -v composer >/dev/null 2>&1; then
-        log_info "检查composer实际使用的PHP环境:"
-        
-        # 获取composer使用的PHP版本（使用更短超时）
-        log_info "  获取Composer版本信息..."
-        local composer_php_version=""
-        if composer_php_version=$(timeout 5s composer --version 2>/dev/null | grep -o 'PHP [0-9]\+\.[0-9]\+\.[0-9]\+' | head -1 2>/dev/null); then
-            log_info "  Composer使用的PHP版本: $composer_php_version"
-        else
-            log_warning "  获取Composer版本信息超时或失败"
-            log_info "  跳过Composer扩展检测，避免长时间等待"
-            return 0
-        fi
-        
-        # 测试composer能否检测到扩展（使用更短超时，并添加备用方案）
-        log_info "  测试Composer扩展检测..."
-        local platform_output=""
-        if platform_output=$(timeout 8s composer show --platform 2>/dev/null); then
-            for ext in "${problem_exts[@]}"; do
-                log_info "    检查扩展: $ext"
-                if echo "$platform_output" | grep -q "ext-$ext"; then
-                    log_success "    ✓ Composer能检测到扩展: $ext"
-                else
-                    log_error "    ✗ Composer无法检测到扩展: $ext"
-                    log_info "      → 这可能是composer install报错的原因"
-                fi
-            done
-        else
-            log_warning "  Composer扩展检测超时或失败"
-            log_info "  这可能是机器性能或网络问题导致的"
-            log_info "  建议手动检查: composer show --platform"
-        fi
-    else
-        log_warning "composer命令不可用"
-    fi
-    
-    echo
-    log_info "=== 可能的解决方案 ==="
-    log_info "1. 已尝试修复Composer PHP版本 - 如果版本仍不匹配："
-    log_info "   可能需要手动设置PATH或重新安装Composer"
-    log_info "2. 如果扩展已加载但Composer检测不到："
-    log_info "   - 重启PHP-FPM服务：sudo systemctl restart php${PHP_VERSION: -2}-fpm"  
-    log_info "   - 或者在composer.json中忽略平台检查：composer install --ignore-platform-reqs"
-    log_info "3. 对于缺失的扩展文件，使用宝塔面板手动安装对应扩展"
-    log_info "4. 如果CLI和FPM状态不一致，确保两个配置文件都正确"
-    log_info "5. 检查PHP编译配置问题，可能需要重新编译PHP"
-    
-    echo
 }
 
 # 版本比较函数
@@ -1572,86 +1416,124 @@ fix_bt_composer_php() {
     fi
     
     local bt_php="/www/server/php/$PHP_VERSION/bin/php"
+    local expected_version="${PHP_VERSION:0:1}.${PHP_VERSION:1:1}"
     
-    log_info "修复宝塔环境Composer PHP版本..."
-    log_info "预期使用PHP路径: $bt_php"
+    log_info "检查Composer PHP配置..."
     
-    # 检查Composer当前使用的PHP版本
-    local current_composer_php=""
-    if command -v composer &> /dev/null; then
-        # 尝试获取Composer使用的PHP信息
-        current_composer_php=$(timeout 8s composer --version 2>/dev/null | grep -o 'PHP [0-9]\+\.[0-9]\+\.[0-9]\+' | head -1 2>/dev/null || echo "")
-        
-        if [ -n "$current_composer_php" ]; then
-            log_info "Composer当前使用: $current_composer_php"
-        else
-            log_warning "无法获取Composer当前PHP版本"
-        fi
-    fi
+    # 检查系统默认PHP CLI命令
+    local default_php_path=""
+    local default_php_version=""
     
-    # 创建Composer wrapper脚本，强制使用宝塔PHP
-    local composer_wrapper="/usr/local/bin/composer-bt"
-    log_info "创建Composer wrapper: $composer_wrapper"
-    
-    # 检查原始composer路径
-    local original_composer=$(which composer 2>/dev/null || echo "/usr/local/bin/composer")
-    
-    # 如果原始composer是phar文件，直接指向它；否则使用备份文件
-    local composer_target=""
-    if [ -f "${original_composer}.original" ]; then
-        composer_target="${original_composer}.original"
-    elif [ -f "$original_composer" ] && file "$original_composer" | grep -q "PHAR"; then
-        composer_target="$original_composer"
-    else
-        composer_target="$original_composer"
-    fi
-    
-    # 创建wrapper脚本
-    cat <<EOF | sudo tee "$composer_wrapper" > /dev/null
-#!/bin/bash
-# Composer wrapper for BaoTa Panel - Auto generated
-# Forces composer to use BaoTa PHP $PHP_VERSION
-
-export PHP_BINARY="$bt_php"
-export COMPOSER_RUNTIME_BIN_DIR="/www/server/php/$PHP_VERSION/bin"
-
-# 直接使用宝塔PHP执行composer
-exec "$bt_php" "$composer_target" "\$@"
-EOF
-    
-    sudo chmod +x "$composer_wrapper"
-    
-    # 备份原始composer（如果还没备份）
-    if [ ! -f "${original_composer}.original" ]; then
-        sudo cp "$original_composer" "${original_composer}.original" 2>/dev/null || true
-        log_info "已备份原始composer"
-    fi
-    
-    # 用wrapper替换原始composer
-    sudo cp "$composer_wrapper" "$original_composer"
-    log_info "已应用Composer wrapper"
-    
-    # 测试修复效果
-    log_info "测试修复效果..."
-    if command -v composer &> /dev/null; then
-        local new_composer_php=""
-        if new_composer_php=$(timeout 8s composer --version 2>/dev/null | grep -o 'PHP [0-9]\+\.[0-9]\+\.[0-9]\+' | head -1 2>/dev/null); then
-            log_success "修复后Composer使用: $new_composer_php"
+    if command -v php >/dev/null 2>&1; then
+        default_php_path=$(which php)
+        if default_php_version=$(timeout 3s php -r "echo PHP_VERSION;" 2>/dev/null); then
+            log_info "系统默认PHP CLI: $default_php_path"
+            log_info "PHP版本: $default_php_version"
             
-            # 验证PHP版本是否匹配
-            local expected_version="${PHP_VERSION:0:1}.${PHP_VERSION:1:1}"
-            if echo "$new_composer_php" | grep -q "$expected_version"; then
-                log_success "PHP版本匹配成功！"
-                return 0
+            # 检查默认PHP是否已经是宝塔PHP
+            if [[ "$default_php_path" == *"/www/server/php"* ]]; then
+                log_success "✓ 系统默认PHP已经是宝塔PHP"
+                
+                # 检查版本是否匹配
+                if echo "$default_php_version" | grep -q "^$expected_version"; then
+                    log_success "✓ PHP版本匹配 ($expected_version)"
+                    
+                    # 检查Composer使用的PHP版本
+                    if command -v composer >/dev/null 2>&1; then
+                        local composer_php=""
+                        if composer_php=$(timeout 5s composer --version 2>/dev/null | grep -o 'PHP [0-9]\+\.[0-9]\+\.[0-9]\+' | head -1); then
+                            log_info "Composer使用: $composer_php"
+                            if echo "$composer_php" | grep -q "$expected_version"; then
+                                log_success "✓ Composer已正确使用宝塔PHP $expected_version"
+                                return 0
+                            fi
+                        fi
+                    fi
+                else
+                    log_warning "! PHP版本不匹配，当前: $default_php_version，预期: $expected_version"
+                fi
             else
-                log_warning "PHP版本仍不匹配，但可能可以正常工作"
+                log_warning "! 系统默认PHP不是宝塔PHP"
+            fi
+        fi
+    else
+        log_warning "未找到系统默认php命令"
+    fi
+    
+    echo
+    log_info "=== 解决方案 ==="
+    log_info "请通过宝塔面板设置默认PHP CLI版本："
+    log_info ""
+    log_info "方法1: 使用宝塔命令行工具（推荐）"
+    log_info "  执行命令: btpython /www/server/panel/script/set_php_cli_version.py $expected_version"
+    log_info ""
+    log_info "方法2: 在宝塔面板Web界面操作"
+    log_info "  1. 登录宝塔面板"
+    log_info "  2. 进入 软件商店 -> 已安装"
+    log_info "  3. 找到 PHP-$expected_version"
+    log_info "  4. 点击设置 -> 命令行版本"
+    log_info "  5. 设置为默认CLI版本"
+    log_info ""
+    log_info "方法3: 手动创建软链接"
+    log_info "  sudo rm -f /usr/bin/php"
+    log_info "  sudo ln -s $bt_php /usr/bin/php"
+    log_info ""
+    log_info "方法4: 修改PATH环境变量（临时）"
+    log_info "  export PATH=\"/www/server/php/$PHP_VERSION/bin:\$PATH\""
+    log_info "  添加到 ~/.bashrc 可永久生效"
+    echo
+    
+    # 询问是否自动设置
+    log_info "是否尝试自动设置默认PHP CLI？"
+    read -p "选择操作 (y/n): " -n 1 -r choice
+    echo
+    
+    if [[ $choice =~ ^[Yy]$ ]]; then
+        log_info "尝试自动设置默认PHP CLI..."
+        
+        # 方法1: 尝试使用宝塔脚本
+        if [ -f "/www/server/panel/script/set_php_cli_version.py" ]; then
+            log_info "使用宝塔脚本设置..."
+            if btpython /www/server/panel/script/set_php_cli_version.py "$expected_version" 2>/dev/null; then
+                log_success "✓ 已通过宝塔脚本设置默认PHP CLI"
+                return 0
+            fi
+        fi
+        
+        # 方法2: 创建软链接
+        log_info "创建软链接..."
+        if [ -L "/usr/bin/php" ] || [ -f "/usr/bin/php" ]; then
+            sudo rm -f /usr/bin/php
+        fi
+        
+        if sudo ln -s "$bt_php" /usr/bin/php; then
+            log_success "✓ 已创建软链接: /usr/bin/php -> $bt_php"
+            
+            # 验证设置
+            if php_version=$(timeout 3s php -r "echo PHP_VERSION;" 2>/dev/null); then
+                log_success "✓ 验证成功，PHP版本: $php_version"
+                
+                # 同时处理php-config和phpize
+                if [ -L "/usr/bin/php-config" ] || [ -f "/usr/bin/php-config" ]; then
+                    sudo rm -f /usr/bin/php-config
+                fi
+                sudo ln -s "/www/server/php/$PHP_VERSION/bin/php-config" /usr/bin/php-config 2>/dev/null || true
+                
+                if [ -L "/usr/bin/phpize" ] || [ -f "/usr/bin/phpize" ]; then
+                    sudo rm -f /usr/bin/phpize
+                fi
+                sudo ln -s "/www/server/php/$PHP_VERSION/bin/phpize" /usr/bin/phpize 2>/dev/null || true
+                
+                return 0
             fi
         else
-            log_warning "修复后仍无法获取Composer版本信息"
+            log_error "创建软链接失败"
         fi
+    else
+        log_info "跳过自动设置，请手动配置"
     fi
     
-    return 0
+    return 1
 }
 
 # 检查Composer版本和可用性
