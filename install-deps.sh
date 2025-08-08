@@ -35,409 +35,251 @@ show_help() {
     echo ""
 }
 
-# 深度诊断Composer PHP版本问题和扩展检测
+# 深度诊断PHP扩展问题（简化版）
 diagnose_php_extension_issues() {
     log_info "运行PHP扩展深度诊断模式..."
     
-    if ! check_bt_panel || [ -z "$PHP_VERSION" ]; then
-        log_info "非宝塔环境，跳过深度诊断"
-        return 0
+    if ! check_bt_panel; then
+        log_error "未检测到宝塔环境，诊断功能需要宝塔环境"
+        return 1
     fi
     
-    local bt_php="/www/server/php/$PHP_VERSION/bin/php"
-    local has_composer_issue=false
     local minimum_php_version="8.3"
+    local has_issue=false
     
     echo
-    log_info "=== 步骤1: 检测系统PHP冲突 ==="
+    log_info "=== 步骤1: 检查 /usr/bin/php 配置 ==="
     
-    # 检测可能冲突的系统PHP
-    log_info "检测可能冲突的系统PHP..."
-    local system_phps=()
-    
-    # 首先检查 /usr/bin/php
+    # 检查 /usr/bin/php 是否存在且正确
     if [ -e "/usr/bin/php" ]; then
-        if [ -L "/usr/bin/php" ]; then
-            local link_target=$(readlink -f "/usr/bin/php")
-            if [[ "$link_target" == *"/www/server/php"* ]]; then
-                local php_version=$(timeout 3s /usr/bin/php -r "echo PHP_VERSION;" 2>/dev/null || echo "unknown")
-                log_info "  /usr/bin/php 指向宝塔PHP: $php_version"
-                
-                # 检查版本是否满足最低要求
-                if [ "$php_version" != "unknown" ] && version_compare "$php_version" "$minimum_php_version"; then
-                    log_success "  ✓ PHP版本满足要求 (>= $minimum_php_version)"
-                else
-                    log_warning "  ! PHP版本过低，当前: $php_version，最低需要: $minimum_php_version"
-                    log_info "  建议通过宝塔面板升级到更高版本的PHP"
-                    system_phps+=("/usr/bin/php")
-                fi
+        local php_version=$(timeout 3s /usr/bin/php -r "echo PHP_VERSION;" 2>/dev/null || echo "unknown")
+        local real_path=$(readlink -f "/usr/bin/php" 2>/dev/null || echo "/usr/bin/php")
+        
+        log_info "  当前PHP: /usr/bin/php -> $real_path"
+        log_info "  PHP版本: $php_version"
+        
+        if [[ "$real_path" == *"/www/server/php"* ]]; then
+            if [ "$php_version" != "unknown" ] && version_compare "$php_version" "$minimum_php_version"; then
+                log_success "  ✓ /usr/bin/php 配置正确 (宝塔PHP >= $minimum_php_version)"
             else
-                log_warning "  ! /usr/bin/php 软链接指向非宝塔PHP: $link_target"
-                system_phps+=("/usr/bin/php")
+                log_warning "  ! PHP版本过低: $php_version，需要 >= $minimum_php_version"
+                has_issue=true
             fi
         else
-            local php_version=$(timeout 3s /usr/bin/php -r "echo PHP_VERSION;" 2>/dev/null || echo "unknown")
-            log_warning "  ! /usr/bin/php 是系统安装的PHP: $php_version"
-            system_phps+=("/usr/bin/php")
+            log_error "  ✗ /usr/bin/php 不是宝塔PHP"
+            has_issue=true
         fi
     else
-        log_info "  /usr/bin/php 不存在，需要创建"
+        log_warning "  ! /usr/bin/php 不存在，需要创建链接"
+        has_issue=true
     fi
     
-    # 检测明显的系统PHP版本
+    # 检测系统PHP包
+    echo
+    log_info "=== 步骤2: 检测系统PHP包 ==="
     local system_php_paths=(
         "/usr/bin/php8.4"
         "/usr/bin/php8.3"
-        "/usr/bin/php8.2" 
+        "/usr/bin/php8.2"
         "/usr/bin/php8.1"
         "/usr/bin/php8.0"
         "/usr/bin/php7.4"
     )
     
+    local system_phps=()
     for php_path in "${system_php_paths[@]}"; do
         if [ -x "$php_path" ]; then
-            local version=""
-            if version=$(timeout 3s "$php_path" -r "echo PHP_VERSION;" 2>/dev/null); then
-                system_phps+=("$php_path")
-                log_warning "  ! 发现系统PHP: $php_path -> $version (建议卸载)"
-            fi
+            local version=$(timeout 3s "$php_path" -r "echo PHP_VERSION;" 2>/dev/null || echo "unknown")
+            system_phps+=("$php_path")
+            log_warning "  ! 发现系统PHP: $php_path ($version)"
         fi
     done
     
     if [ ${#system_phps[@]} -eq 0 ]; then
-        log_success "  ✓ 未发现冲突的系统PHP"
+        log_success "  ✓ 未发现系统PHP包"
     else
-        log_warning "  ! 发现 ${#system_phps[@]} 个系统PHP，可能影响Composer"
-        # 注意：这里先不设置has_composer_issue=true，等Composer实际检测后再判断
+        log_warning "  ! 发现 ${#system_phps[@]} 个系统PHP包，建议卸载"
+        has_issue=true
     fi
     
     echo
-    log_info "=== 步骤2: Composer PHP版本诊断 ==="
-    
-    # 先检查Composer是否存在
-    log_info "检测Composer命令..."
+    log_info "=== 步骤3: 检查Composer配置 ==="
     
     if ! command -v composer >/dev/null 2>&1; then
         log_error "  ✗ 未找到Composer命令"
-        log_info "  需要先安装Composer: curl -sS https://getcomposer.org/installer | php"
-        log_info "  然后移动到系统路径: sudo mv composer.phar /usr/local/bin/composer"
+        log_info "  建议安装: curl -sS https://getcomposer.org/installer | php"
+        log_info "  然后移动: sudo mv composer.phar /usr/local/bin/composer"
         return 1
     fi
     
-    # 获取composer路径和信息
     local composer_path=$(which composer)
-    local composer_real_path=$(readlink -f "$composer_path" 2>/dev/null || echo "$composer_path")
-    local actual_composer="$composer_path"  # 默认使用找到的composer路径
+    local composer_is_wrapper=false
     
     log_info "  Composer路径: $composer_path"
-    if [ "$composer_path" != "$composer_real_path" ]; then
-        log_info "  实际路径: $composer_real_path"
-    fi
     
     # 检测composer是否是wrapper脚本
     if [ -f "$composer_path" ]; then
-        # 检查文件类型
         local file_type=$(file -b "$composer_path" 2>/dev/null)
         if [[ "$file_type" == *"shell script"* ]] || [[ "$file_type" == *"bash"* ]] || [[ "$file_type" == *"text"* ]]; then
-            # 是脚本文件，可能是wrapper
-            log_warning "  ! 检测到Composer可能是wrapper脚本"
-            
-            # 检查是否存在composer.original
-            if [ -f "/usr/bin/composer.original" ]; then
-                actual_composer="/usr/bin/composer.original"
-                log_info "  找到原始Composer: $actual_composer"
-            elif [ -f "/usr/local/bin/composer.original" ]; then
-                actual_composer="/usr/local/bin/composer.original"
-                log_info "  找到原始Composer: $actual_composer"
-            elif [ -f "${composer_path}.original" ]; then
-                actual_composer="${composer_path}.original"
-                log_info "  找到原始Composer: $actual_composer"
+            # 检查内容是否包含wrapper特征
+            if grep -q "BaoTa\|wrapper\|exec.*php.*composer" "$composer_path" 2>/dev/null; then
+                composer_is_wrapper=true
+                log_error "  ✗ 检测到Composer是宝塔wrapper脚本"
+                
+                # 查找原始composer
+                if [ -f "/usr/bin/composer.original" ]; then
+                    log_info "  找到原始Composer: /usr/bin/composer.original"
+                elif [ -f "/usr/local/bin/composer.original" ]; then
+                    log_info "  找到原始Composer: /usr/local/bin/composer.original"
+                elif [ -f "${composer_path}.original" ]; then
+                    log_info "  找到原始Composer: ${composer_path}.original"
+                fi
+                has_issue=true
+            else
+                log_info "  Composer是脚本文件，但不是wrapper"
             fi
         elif [[ "$file_type" == *"PHP script"* ]] || [[ "$file_type" == *"phar"* ]]; then
-            log_info "  Composer是PHP/PHAR文件，正常"
+            log_success "  ✓ Composer是PHP/PHAR文件（正常）"
         fi
     fi
     
-    # 检测Composer使用的PHP版本
-    log_info "检测Composer使用的PHP版本..."
-    
-    local composer_php_version=""
-    local composer_php_match=false
-    
-    # 设置PHP命令路径
-    local php_cmd="/www/server/php/$PHP_VERSION/bin/php"
-    log_info "  使用PHP执行器: $php_cmd"
-    
-    # 验证PHP版本
-    local test_php_version=$($php_cmd -r "echo PHP_VERSION;" 2>/dev/null)
-    log_info "  PHP执行器版本: $test_php_version"
-    
-    # 方法1: composer --version
-    log_info "  方法1: composer --version"
-    local composer_output=""
-    # 使用宝塔PHP明确执行真正的composer
-    if composer_output=$(timeout 10s $php_cmd "$actual_composer" --version 2>/dev/null); then
-        log_info "    Composer输出: $composer_output"
-        
-        # 尝试多种格式提取PHP版本
-        if composer_php_version=$(echo "$composer_output" | grep -o 'PHP [0-9]\+\.[0-9]\+\.[0-9]\+' | head -1); then
-            log_info "    检测到PHP版本: $composer_php_version"
-        elif composer_php_version=$(echo "$composer_output" | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' | head -1); then
-            composer_php_version="PHP $composer_php_version"
-            log_info "    检测到PHP版本: $composer_php_version"
+    # 测试composer执行
+    if [ -e "/usr/bin/php" ]; then
+        log_info "  测试Composer执行..."
+        local composer_version=$(timeout 5s /usr/bin/php $(which composer) --version 2>&1 | head -1)
+        if [[ "$composer_version" == *"Composer version"* ]]; then
+            log_success "  ✓ Composer可以正常执行"
+            log_info "    $composer_version"
         else
-            log_warning "    ! 无法从输出中提取PHP版本"
-            composer_php_version=""
+            log_error "  ✗ Composer执行失败"
+            has_issue=true
         fi
-        
-        if [ -n "$composer_php_version" ]; then
-            # 提取版本号进行比较
-            local composer_version=$(echo "$composer_php_version" | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' | head -1)
-            if [ -n "$composer_version" ] && version_compare "$composer_version" "$minimum_php_version"; then
-                log_success "    ✓ Composer使用的PHP版本满足要求 (>= $minimum_php_version)"
-                composer_php_match=true
-            else
-                log_error "    ✗ Composer使用的PHP版本过低，最低需要: $minimum_php_version，实际: $composer_php_version"
-                has_composer_issue=true
-            fi
-        else
-            has_composer_issue=true
-        fi
-    else
-        log_warning "    ! Composer版本检测超时(10秒)，可能系统负载过高"
-        has_composer_issue=true
-    fi
-    
-    # 方法2: composer diagnose (如果第一个方法失败)
-    if [ "$composer_php_match" = false ]; then
-        log_info "  方法2: composer diagnose"
-        if composer_diag=$(timeout 30s $php_cmd "$actual_composer" diagnose 2>/dev/null | grep -i "php version"); then
-            log_info "    诊断信息: $composer_diag"
-        else
-            log_warning "    ! Composer诊断超时(30秒)，可能网络或系统问题"
-        fi
-    fi
-    
-    # 方法3: 检查系统默认PHP CLI设置
-    log_info "  方法3: 检查系统默认PHP CLI"
-    local default_php_path=""
-    if command -v php >/dev/null 2>&1; then
-        default_php_path=$(which php)
-        # 解析软链接获取真实路径
-        local real_php_path=$(readlink -f "$default_php_path" 2>/dev/null || echo "$default_php_path")
-        local default_php_version=""
-        if default_php_version=$(timeout 3s php -r "echo PHP_VERSION;" 2>/dev/null); then
-            if [[ "$real_php_path" == *"/www/server/php"* ]]; then
-                if version_compare "$default_php_version" "$minimum_php_version"; then
-                    log_success "    ✓ 系统默认PHP配置正确"
-                    log_info "    路径: $default_php_path -> $real_php_path，版本: $default_php_version"
-                else
-                    log_warning "    ! 系统默认PHP版本过低"
-                    log_info "    路径: $default_php_path -> $real_php_path，版本: $default_php_version，需要: >= $minimum_php_version"
-                fi
-            else
-                log_warning "    ! 系统默认PHP不是宝塔PHP"
-                log_info "    当前路径: $default_php_path -> $real_php_path，版本: $default_php_version"
-            fi
-        else
-            log_warning "    ! 无法获取系统默认PHP版本"
-        fi
-    else
-        log_warning "    ! 未找到系统默认php命令"
     fi
     
     echo
-    log_info "=== 步骤3: Composer扩展全面检测 ==="
+    log_info "=== 步骤4: 使用Composer检测扩展 ==="
     
-    # 使用composer show --platform检测所有扩展
-    log_info "使用Composer检测所有可用扩展..."
-    
-    local platform_output=""
-    local platform_success=false
-    
-    # 使用宝塔PHP执行真正的composer show
-    if platform_output=$(timeout 60s $php_cmd "$actual_composer" show --platform 2>/dev/null); then
-        platform_success=true
-        log_success "  ✓ Composer平台检测成功"
+    if [ -e "/usr/bin/php" ] && command -v composer >/dev/null 2>&1; then
+        log_info "  执行: composer show --platform"
         
-        # 分析平台输出
-        local total_extensions=0
-        local php_extensions=0
-        
-        # 统计扩展数量
-        total_extensions=$(echo "$platform_output" | grep -c "^ext-" || echo "0")
-        php_extensions=$(echo "$platform_output" | grep -c "^php " || echo "0")
-        
-        log_info "  检测到 $total_extensions 个PHP扩展"
-        log_info "  检测到PHP版本信息: $php_extensions 项"
-        
-        # 使用已定义的扩展数组（与其他函数保持一致）
-        local required_extensions=(
-            "bcmath" "calendar" "ctype" "curl" "dom" "fileinfo"
-            "gd" "iconv" "intl" "json" "mbstring" "openssl"
-            "pcntl" "pcre" "pdo" "pdo_mysql" "redis" "tokenizer" 
-            "xml" "zip"
-        )
-        
-        local auto_extensions=(
-            "bcmath" "ctype" "curl" "dom" "gd" "iconv" 
-            "intl" "json" "openssl" "pcntl" "pcre" 
-            "pdo" "pdo_mysql" "tokenizer" "xml" "zip"
-        )
-        
-        local manual_extensions=("calendar" "fileinfo" "mbstring" "redis")
-        
-        # 检查所有必需扩展状态
-        log_info "  必需扩展检测状态 (${#required_extensions[@]} 个):"
-        local missing_critical=()
-        
-        for ext in "${required_extensions[@]}"; do
-            if echo "$platform_output" | grep -q "^ext-$ext"; then
-                # 区分自动安装和手动安装扩展
-                if [[ " ${auto_extensions[*]} " =~ " ${ext} " ]]; then
-                    log_success "    ✓ ext-$ext (可自动安装)"
-                else
-                    log_success "    ✓ ext-$ext (需手动安装)"
-                fi
-            else
-                if [[ " ${auto_extensions[*]} " =~ " ${ext} " ]]; then
-                    log_warning "    ! ext-$ext (可自动安装，但未检测到)"
-                else
-                    log_warning "    ! ext-$ext (需手动安装，且未检测到)"
-                fi
-                missing_critical+=("$ext")
-            fi
-        done
-        
-        if [ ${#missing_critical[@]} -eq 0 ]; then
-            log_success "  ✓ 所有必需扩展都能被Composer检测到 (${#required_extensions[@]}/${#required_extensions[@]})"
-            if [ "$composer_php_match" = true ] || [ ${#system_phps[@]} -eq 0 ]; then
-                log_success "  ✓ Composer配置完全正常，无需修复！"
-                has_composer_issue=false  # 确保标记为正常
-                return 0
-            fi
-        else
-            log_error "  ✗ 检测到 ${#missing_critical[@]} 个必需扩展缺失 (${#missing_critical[@]}/${#required_extensions[@]}):"
-            local missing_auto=0
-            local missing_manual=0
-            for ext in "${missing_critical[@]}"; do
-                if [[ " ${auto_extensions[*]} " =~ " ${ext} " ]]; then
-                    log_error "      - $ext (可自动安装)"
-                    missing_auto=$((missing_auto + 1))
-                else
-                    log_error "      - $ext (需手动安装)"
-                    missing_manual=$((missing_manual + 1))
-                fi
-            done
-            log_info "  缺失统计: 可自动安装 $missing_auto 个, 需手动安装 $missing_manual 个"
-            has_composer_issue=true
-        fi
-        
-    else
-        log_error "  ✗ Composer平台检测超时(60秒)或失败"
-        log_error "    可能原因: 网络问题、系统负载过高或Composer配置问题"
-        has_composer_issue=true
-        platform_success=false
-    fi
-    
-    echo
-    log_info "=== 步骤4: 问题解决方案 ==="
-    
-    if [ "$has_composer_issue" = true ]; then
-        log_warning "检测到Composer PHP配置问题！"
-        
-        if [ ${#system_phps[@]} -gt 0 ]; then
-            log_warning "问题原因分析："
-            log_warning "- 系统安装了冲突的PHP: ${system_phps[*]}"
-            log_warning "- Composer可能使用系统PHP而非宝塔PHP (需要>= $minimum_php_version)"
-            if [ "$platform_success" = false ]; then
-                log_warning "- 导致Composer无法正确检测扩展"
-            else
-                log_warning "- 虽然能检测平台但版本不匹配"
-            fi
+        local platform_output=""
+        if platform_output=$(timeout 30s /usr/bin/php $(which composer) show --platform 2>/dev/null); then
+            local ext_count=$(echo "$platform_output" | grep -c "^ext-" || echo "0")
+            log_success "  ✓ 检测到 $ext_count 个PHP扩展"
             
-            echo
-            log_info "建议的解决方案："
+            # 检查必需扩展
+            local required_extensions=(
+                "bcmath" "calendar" "ctype" "curl" "dom" "fileinfo"
+                "gd" "iconv" "intl" "json" "mbstring" "openssl"
+                "pcntl" "pcre" "pdo" "pdo_mysql" "redis" "tokenizer" 
+                "xml" "zip"
+            )
             
-            # 分析系统PHP类型
-            local has_system_packages=false
-            local needs_php_link_fix=false
-            
-            for php_path in "${system_phps[@]}"; do
-                if [[ "$php_path" =~ ^/usr/bin/php[0-9]\.[0-9]$ ]]; then
-                    has_system_packages=true
-                elif [[ "$php_path" == "/usr/bin/php" ]]; then
-                    needs_php_link_fix=true
+            local missing=()
+            for ext in "${required_extensions[@]}"; do
+                if ! echo "$platform_output" | grep -q "^ext-$ext"; then
+                    missing+=("$ext")
                 fi
             done
             
-            if [ "$has_system_packages" = true ]; then
-                echo "1. [推荐] 卸载冲突的系统PHP包"
-                echo "   系统通过包管理器安装了PHP，会与宝塔PHP冲突"
-            fi
-            
-            if [ "$needs_php_link_fix" = true ]; then
-                echo "2. 修复 /usr/bin/php 配置问题"
-                echo "   当前 /usr/bin/php 版本过低或指向错误，需要>= PHP $minimum_php_version"
-            fi
-            
-            # 如果两个问题都不存在，说明可能还有其他问题
-            if [ "$has_system_packages" = false ] && [ "$needs_php_link_fix" = false ]; then
-                echo "检测到未知的PHP配置问题，建议手动检查"
-            fi
-            
-            echo
-            read -p "是否自动修复这些问题？(y/n): " -n 1 -r choice < /dev/tty
-            echo
-            
-            if [[ $choice =~ ^[Yy]$ ]]; then
-                # 先卸载系统PHP包
-                if [ "$has_system_packages" = true ]; then
-                    log_info "正在卸载系统PHP包..."
-                    if remove_system_php; then
-                        log_success "系统PHP包已卸载"
-                    else
-                        log_warning "部分系统PHP包卸载失败"
-                    fi
-                fi
-                
-                # 修复 /usr/bin/php 链接
-                log_info "正在修复 /usr/bin/php 链接..."
-                if fix_bt_composer_php; then
-                    log_success "PHP链接修复完成，请重新运行诊断验证"
-                else
-                    log_warning "PHP链接修复失败，请手动处理"
-                fi
+            if [ ${#missing[@]} -eq 0 ]; then
+                log_success "  ✓ 所有必需扩展都已安装"
             else
-                log_info "跳过自动修复，继续诊断..."
+                log_error "  ✗ 缺少 ${#missing[@]} 个扩展: ${missing[*]}"
+                has_issue=true
             fi
         else
-            log_warning "未检测到系统PHP冲突，但Composer仍有问题"
-            log_info "建议检查:"
-            log_info "- Composer安装是否正确"
-            log_info "- PHP配置是否完整"
-            log_info "- 是否需要重新安装依赖"
+            log_error "  ✗ Composer平台检测失败"
+            has_issue=true
         fi
     else
-        log_success "Composer PHP配置正常"
-        if [ "$platform_success" = true ]; then
-            log_success "扩展检测功能正常"
-            log_success "系统配置无问题，可以正常使用！"
-        fi
+        log_warning "  跳过扩展检测（PHP或Composer未就绪）"
     fi
     
     echo
     log_info "=== 诊断总结 ==="
-    if [ "$has_composer_issue" = true ]; then
-        log_error "诊断结论: Composer PHP配置存在问题"
-        if [ -n "${missing_critical:-}" ] && [ ${#missing_critical[@]} -gt 0 ]; then
-            log_error "主要症状: ${#missing_critical[@]} 个必需扩展检测异常"
+    
+    if [ "$has_issue" = true ]; then
+        log_error "发现问题，需要修复："
+        
+        # 提供修复选项
+        echo
+        read -p "是否自动修复这些问题？(y/n): " -n 1 -r choice < /dev/tty
+        echo
+        
+        if [[ $choice =~ ^[Yy]$ ]]; then
+            # 1. 卸载系统PHP
+            if [ ${#system_phps[@]} -gt 0 ]; then
+                log_info "正在卸载系统PHP包..."
+                remove_system_php
+            fi
+            
+            # 2. 修复 /usr/bin/php
+            log_info "正在修复 /usr/bin/php..."
+            fix_bt_composer_php
+            
+            # 3. 修复Composer wrapper
+            if [ "$composer_is_wrapper" = true ]; then
+                log_info "正在修复Composer wrapper..."
+                fix_composer_wrapper
+            fi
+            
+            log_success "修复完成，请重新运行诊断验证"
+        else
+            log_info "跳过自动修复"
         fi
-        log_error "建议: 优先解决PHP版本冲突问题"
     else
-        log_success "诊断结论: Composer配置完全正常"
-        log_success "PHP版本: 满足最低要求 (>= $minimum_php_version)"
-        log_success "扩展检测: 所有 $([ -n "${required_extensions:-}" ] && echo "${#required_extensions[@]}" || echo "必需") 个扩展正常检测"
+        log_success "✓ PHP和Composer配置正确，无需修复"
+    fi
+}
+
+# 修复Composer wrapper问题
+fix_composer_wrapper() {
+    local composer_path=$(which composer)
+    
+    if [ ! -f "$composer_path" ]; then
+        log_error "找不到composer路径"
+        return 1
+    fi
+    
+    # 查找原始composer
+    local original_composer=""
+    if [ -f "/usr/bin/composer.original" ]; then
+        original_composer="/usr/bin/composer.original"
+    elif [ -f "/usr/local/bin/composer.original" ]; then
+        original_composer="/usr/local/bin/composer.original"
+    elif [ -f "${composer_path}.original" ]; then
+        original_composer="${composer_path}.original"
+    fi
+    
+    if [ -n "$original_composer" ] && [ -f "$original_composer" ]; then
+        log_info "恢复原始Composer: $original_composer -> $composer_path"
+        sudo rm -f "$composer_path"
+        sudo mv "$original_composer" "$composer_path"
+        sudo chmod +x "$composer_path"
+        log_success "Composer已恢复为原始版本"
+        return 0
+    else
+        log_info "未找到原始Composer，重新安装..."
+        
+        # 备份现有composer
+        if [ -f "$composer_path" ]; then
+            sudo mv "$composer_path" "${composer_path}.bak"
+        fi
+        
+        # 重新下载安装
+        local temp_file="/tmp/composer_installer_$$.php"
+        if curl -sS https://getcomposer.org/installer -o "$temp_file"; then
+            if /usr/bin/php "$temp_file" --install-dir=/usr/local/bin --filename=composer 2>/dev/null; then
+                rm -f "$temp_file"
+                log_success "Composer重新安装成功"
+                return 0
+            fi
+        fi
+        
+        rm -f "$temp_file"
+        log_error "Composer重新安装失败"
+        return 1
     fi
 }
 
@@ -2134,47 +1976,11 @@ main() {
     
     # 如果是诊断模式，只运行诊断
     if [ "$run_diagnose" = true ]; then
-        log_info "运行PHP扩展深度诊断模式..."
-        echo
-        
-        # 检测系统和PHP版本（使用超时和调试）
-        log_info "步骤1: 检测系统环境..."
-        if timeout 30s detect_system >/dev/null 2>&1; then
-            log_success "系统检测完成"
-        else
-            log_warning "系统检测超时或失败，继续执行..."
-        fi
-        
-        log_info "步骤2: 检查宝塔环境..."
-        if check_bt_panel; then
-            log_success "检测到宝塔环境"
-            log_info "步骤3: 选择PHP版本..."
-            if ! select_bt_php_version; then
-                log_error "未找到可用的PHP版本（需要8.3+）"
-                return 1
-            fi
-            log_success "PHP版本选择完成: $PHP_VERSION"
-        else
-            log_error "未检测到宝塔环境，诊断功能需要宝塔环境"
-            exit 1
-        fi
-        
-        log_info "步骤4: 开始扩展诊断..."
-        log_info "诊断超时限制: 5分钟"
-        
-        # 直接运行诊断（支持用户交互）
-        log_info "开始诊断..."
+        # 直接运行诊断，不需要选择PHP版本
         if diagnose_php_extension_issues; then
             log_success "诊断完成"
         else
-            log_warning "诊断过程中出现问题"
-            echo
-            log_info "故障排除建议："
-            log_info "1. 检查系统资源使用情况: top, free -h"
-            log_info "2. 检查磁盘空间和I/O: df -h, iostat"  
-            log_info "3. 检查PHP进程: ps aux | grep php"
-            log_info "4. 手动检查扩展: php -m | grep bcmath"
-            log_info "5. 如果composer很慢，尝试: composer install --ignore-platform-reqs"
+            log_error "诊断失败"
         fi
         return 0
     fi
