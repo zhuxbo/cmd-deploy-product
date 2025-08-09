@@ -92,6 +92,11 @@ check_database() {
     # 读取数据库配置
     read_db_config
     
+    # 设置密码环境变量（如果有密码）
+    if [ -n "$DB_PASSWORD" ]; then
+        export MYSQL_PWD="$DB_PASSWORD"
+    fi
+    
     echo
     log_info "=== 数据库统计信息 ==="
     
@@ -162,8 +167,21 @@ check_database() {
     check_disk_space
     
     # 估算备份大小（压缩后约为原始大小的20-30%）
-    ESTIMATED_BACKUP=$(echo "$TOTAL_SIZE * 0.25" | bc 2>/dev/null || echo "$((${TOTAL_SIZE%.*} / 4))")
-    log_info "预计备份文件大小: 约${ESTIMATED_BACKUP}MB（压缩后）"
+    if command -v bc >/dev/null 2>&1; then
+        ESTIMATED_BACKUP=$(echo "$TOTAL_SIZE * 0.25" | bc 2>/dev/null || echo "0")
+    else
+        # 没有bc命令，使用整数运算
+        TOTAL_INT=${TOTAL_SIZE%.*}
+        if [ -n "$TOTAL_INT" ] && [ "$TOTAL_INT" -gt 0 ] 2>/dev/null; then
+            ESTIMATED_BACKUP=$((TOTAL_INT / 4))
+        else
+            ESTIMATED_BACKUP="未知"
+        fi
+    fi
+    
+    if [ "$ESTIMATED_BACKUP" != "未知" ]; then
+        log_info "预计备份文件大小: 约${ESTIMATED_BACKUP}MB（压缩后）"
+    fi
     
     # 清除密码环境变量
     unset MYSQL_PWD

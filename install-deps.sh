@@ -725,7 +725,7 @@ reinstall_composer() {
     log_info "如需切换镜像源，可使用: composer config -g repo.packagist composer https://mirrors.tencent.com/composer/"
     
     # 验证安装
-    local final_version=$(composer --version 2>&1 | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' | head -1)
+    local final_version=$(timeout -k 3s 10s composer --version 2>&1 | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' | head -1)
     if [ -n "$final_version" ]; then
         log_success "Composer $final_version 安装成功"
         

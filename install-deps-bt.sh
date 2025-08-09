@@ -558,9 +558,25 @@ enable_php_functions() {
 check_composer() {
     log_info "检查Composer..."
     
+    # 确保PHP_CMD已设置
+    if [ -z "$PHP_CMD" ]; then
+        log_warning "PHP_CMD未设置，尝试使用默认PHP"
+        if [ -x "/usr/bin/php" ]; then
+            PHP_CMD="/usr/bin/php"
+        else
+            log_error "无法找到可用的PHP命令"
+            return 1
+        fi
+    fi
+    
     if command -v composer >/dev/null 2>&1; then
-        local composer_version=$(composer --version 2>/dev/null | head -1)
-        log_success "Composer已安装: $composer_version"
+        # 使用timeout避免卡住
+        local composer_version=$(timeout 5s composer --version 2>/dev/null | head -1)
+        if [ -n "$composer_version" ]; then
+            log_success "Composer已安装: $composer_version"
+        else
+            log_warning "Composer命令存在但无法获取版本信息（可能是wrapper问题）"
+        fi
         
         # 检查Composer是否是wrapper
         local composer_path=$(which composer)
@@ -577,10 +593,19 @@ check_composer() {
         log_warning "Composer未安装"
         log_info "安装Composer..."
         
-        # 下载并安装Composer
-        curl -sS https://getcomposer.org/installer | $PHP_CMD
-        sudo mv composer.phar /usr/local/bin/composer
-        sudo chmod +x /usr/local/bin/composer
+        # 下载并安装Composer（添加超时）
+        if curl --connect-timeout 10 --max-time 60 -sS https://getcomposer.org/installer | $PHP_CMD; then
+            if [ -f composer.phar ]; then
+                sudo mv composer.phar /usr/local/bin/composer
+                sudo chmod +x /usr/local/bin/composer
+            else
+                log_error "Composer安装程序未生成composer.phar"
+                return 1
+            fi
+        else
+            log_error "下载Composer安装程序失败"
+            return 1
+        fi
         
         if command -v composer >/dev/null 2>&1; then
             log_success "Composer安装成功"
