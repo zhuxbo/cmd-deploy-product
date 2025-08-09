@@ -15,7 +15,7 @@
 ### 支持特性
 - **多系统支持**: Ubuntu/Debian、CentOS/RHEL、Fedora
 - **宝塔面板兼容**: 特殊处理宝塔环境
-- **模块化更新**: 支持单独更新 api/admin/user/easy
+- **模块化更新**: 支持单独更新 api/admin/user/easy/nginx
 - **文件保留**: 自动保留用户配置和数据
 - **服务管理**: 自动管理 Nginx、队列等服务
 
@@ -73,7 +73,7 @@ cmd-deploy-product/
     },
     "frontend": {
       "admin": ["platform-config.json", "logo.svg"],
-      "user": ["platform-config.json", "logo.svg", "qrcode.png"],
+      "user": ["platform-config.json", "logo.svg", "qrcode.png", "favicon.ico"],
       "easy": ["config.json"]
     }
   },
@@ -98,12 +98,11 @@ cmd-deploy-product/
 
 ### 必需软件
 - **PHP 8.3+**: 包含必要扩展
-  - bcmath, ctype, curl, dom, fileinfo
-  - json, mbstring, openssl, pcre, pdo
-  - pdo_mysql, tokenizer, xml, zip
-  - gd, intl, redis, opcache
-- **Web服务器**: Nginx（推荐）或 Apache
-- **数据库**: MySQL 8.0+ 或 MariaDB 10.3+
+  - **composer.json 明确要求**：bcmath, calendar, fileinfo, gd, iconv, intl, json, mbstring, openssl, pcntl, pdo, redis, zip
+  - **Laravel 框架需要**：ctype, curl, dom, pdo_mysql, tokenizer, xml
+  - **性能优化（推荐）**：opcache
+- **Web服务器**: Nginx
+- **数据库**: MySQL 5.7+ 或 MariaDB 10.3+
 - **缓存**: Redis 6.0+
 - **队列**: Supervisor
 
@@ -155,29 +154,31 @@ FORCE_UPDATE=1 ./update.sh
 
 ```
 部署根目录/
-├── backend/            # Laravel 后端
+├── backend/             # Laravel 后端
 │   ├── app/
 │   ├── public/
 │   ├── storage/
-│   ├── .env           # 环境配置（保留）
+│   ├── .env             # 环境配置（保留）
 │   └── ...
-├── frontend/          # 前端文件
-│   ├── admin/         # 管理端
+├── frontend/            # 前端文件
+│   ├── admin/           # 管理端
 │   │   ├── platform-config.json  # 保留
 │   │   └── logo.svg              # 保留
-│   ├── user/          # 用户端
+│   ├── user/            # 用户端
 │   │   ├── platform-config.json  # 保留
 │   │   ├── logo.svg              # 保留
 │   │   └── qrcode.png            # 保留
-│   └── easy/          # 简易端
+│   │   └── favicon.ico           # 保留
+│   └── easy/            # 简易端
 │       └── config.json           # 保留
-├── nginx/             # Nginx 配置
-├── backup/            # 备份目录
-│   ├── install/       # 安装备份
-│   ├── update/        # 更新备份
-│   └── keeper/        # 数据备份
-├── source/            # 源码缓存
-└── info.json          # 构建信息（包含版本）
+├── nginx/               # Nginx 配置
+├── backup/              # 备份目录
+│   ├── install/         # 安装备份
+│   ├── update/          # 更新备份
+│   └── keeper/          # 数据备份
+├── cmd-deploy-scripts/  # 部署脚本
+│   └── source/          # 源码
+└── info.json            # 构建信息（包含版本）
 ```
 
 ## 关键技术处理
