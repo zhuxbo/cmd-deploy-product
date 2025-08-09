@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# 证书管理系统宝塔环境依赖安装脚本
-# 功能：专门处理宝塔面板环境下的PHP依赖安装和配置
+# 证书管理系统宝塔面板专用依赖检查脚本
+# 功能：检测并配置宝塔面板PHP 8.3+及必要的扩展
 
 set -e
 
@@ -18,33 +18,19 @@ log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 log_warning() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 
-# 检测宝塔面板
-check_bt_panel() {
-    # 多种方式检测宝塔面板
-    if [ -f "/www/server/panel/BT-Panel" ] || \
-       [ -f "/www/server/panel/class/panelPlugin.py" ] || \
-       [ -d "/www/server/panel" ] && [ -f "/www/server/panel/data/port.pl" ]; then
-        return 0  # 是宝塔环境
-    fi
-    return 1  # 非宝塔环境
-}
-
 # 显示帮助信息
 show_help() {
-    echo "证书管理系统宝塔环境依赖安装脚本"
+    echo "证书管理系统宝塔面板依赖检查脚本"
     echo ""
     echo "用法: $0 [选项]"
     echo ""
     echo "选项:"
     echo "  -h, --help       显示此帮助信息"
-    echo "  -d, --diagnose   运行PHP扩展深度诊断（用于排查composer install扩展报错）"
-    echo "  -c, --clean-composer   清理所有Composer wrapper并恢复原始文件"
+    echo "  -d, --diagnose   运行PHP扩展深度诊断"
     echo ""
     echo "示例:"
-    echo "  $0               # 正常运行依赖检查和安装"
-    echo "  $0 --diagnose    # 仅运行深度诊断"
-    echo "  $0 -d            # 简写形式的深度诊断"
-    echo "  $0 --clean-composer  # 清理Composer wrapper"
+    echo "  $0               # 正常运行依赖检查"
+    echo "  $0 --diagnose    # 运行深度诊断"
     echo ""
 }
 
@@ -53,275 +39,50 @@ version_compare() {
     local version1="$1"
     local version2="$2"
     
-    # 将版本号转换为数字进行比较
-    local ver1_major="${version1%%.*}"
-    local ver1_minor="${version1#*.}"
-    ver1_minor="${ver1_minor%%.*}"
+    # 移除 v 前缀和后缀信息
+    version1=$(echo "$version1" | sed 's/^v//' | sed 's/-.*//')
+    version2=$(echo "$version2" | sed 's/^v//' | sed 's/-.*//')
     
-    local ver2_major="${version2%%.*}"
-    local ver2_minor="${version2#*.}"
-    ver2_minor="${ver2_minor%%.*}"
-    
-    if [ "$ver1_major" -gt "$ver2_major" ]; then
-        return 0
-    elif [ "$ver1_major" -eq "$ver2_major" ] && [ "$ver1_minor" -ge "$ver2_minor" ]; then
-        return 0
+    # 使用 sort -V 进行版本比较
+    if command -v sort >/dev/null 2>&1; then
+        local sorted_versions=$(printf '%s\n%s' "$version1" "$version2" | sort -V)
+        local lowest=$(echo "$sorted_versions" | head -n1)
+        [ "$lowest" = "$version2" ] && return 0 || return 1
     else
-        return 1
+        # 降级到简单的数字比较
+        local v1_major=$(echo "$version1" | cut -d. -f1)
+        local v1_minor=$(echo "$version1" | cut -d. -f2)
+        
+        local v2_major=$(echo "$version2" | cut -d. -f1)
+        local v2_minor=$(echo "$version2" | cut -d. -f2)
+        
+        if [ "$v1_major" -gt "$v2_major" ]; then
+            return 0
+        elif [ "$v1_major" -lt "$v2_major" ]; then
+            return 1
+        fi
+        
+        if [ "$v1_minor" -ge "$v2_minor" ]; then
+            return 0
+        else
+            return 1
+        fi
     fi
 }
 
-# 深度诊断PHP扩展问题
-diagnose_php_extension_issues() {
-    log_info "运行PHP扩展深度诊断模式..."
-    
-    # 检测运行环境
-    if [ "$EUID" -eq 0 ]; then
-        log_info "以root权限运行（正常）"
-        log_info "提示：Composer命令将使用www用户执行"
-    else
-        log_warning "非root权限运行，某些检测可能失败"
+# 检测宝塔面板
+check_bt_panel() {
+    if [ -f "/www/server/panel/BT-Panel" ] || \
+       [ -f "/www/server/panel/class/panelPlugin.py" ] || \
+       [ -d "/www/server/panel" ] && [ -f "/www/server/panel/data/port.pl" ]; then
+        return 0  # 是宝塔环境
     fi
-    
-    if ! check_bt_panel; then
-        log_error "未检测到宝塔环境，此脚本专用于宝塔环境"
-        log_info "请使用 install-deps.sh 处理普通环境"
-        return 1
-    fi
-    
-    local minimum_php_version="8.3"
-    local has_issue=false
-    
-    echo
-    log_info "=== 步骤1: 检查 /usr/bin/php 配置 ==="
-    
-    # 检查 /usr/bin/php 是否存在且正确
-    if [ -e "/usr/bin/php" ]; then
-        local php_version=$(timeout 3s /usr/bin/php -r "echo PHP_VERSION;" 2>/dev/null || echo "unknown")
-        local real_path=$(readlink -f "/usr/bin/php" 2>/dev/null || echo "/usr/bin/php")
-        
-        log_info "  当前PHP: /usr/bin/php -> $real_path"
-        log_info "  PHP版本: $php_version"
-        
-        if [[ "$real_path" == *"/www/server/php"* ]]; then
-            if [ "$php_version" != "unknown" ] && version_compare "$php_version" "$minimum_php_version"; then
-                log_success "  ✓ /usr/bin/php 配置正确 (宝塔PHP >= $minimum_php_version)"
-            else
-                log_warning "  ! PHP版本过低: $php_version，需要 >= $minimum_php_version"
-                has_issue=true
-            fi
-        else
-            log_error "  ✗ /usr/bin/php 不是宝塔PHP"
-            has_issue=true
-        fi
-    else
-        log_warning "  ! /usr/bin/php 不存在，需要创建链接"
-        has_issue=true
-    fi
-    
-    # 检测系统PHP包
-    echo
-    log_info "=== 步骤2: 检测系统PHP包 ==="
-    local system_php_paths=(
-        "/usr/bin/php8.4"
-        "/usr/bin/php8.3"
-        "/usr/bin/php8.2"
-        "/usr/bin/php8.1"
-        "/usr/bin/php8.0"
-        "/usr/bin/php7.4"
-    )
-    
-    local system_phps=()
-    for php_path in "${system_php_paths[@]}"; do
-        if [ -x "$php_path" ]; then
-            local version=$(timeout 3s "$php_path" -r "echo PHP_VERSION;" 2>/dev/null || echo "unknown")
-            system_phps+=("$php_path")
-            log_warning "  ! 发现系统PHP: $php_path ($version)"
-        fi
-    done
-    
-    if [ ${#system_phps[@]} -eq 0 ]; then
-        log_success "  ✓ 未发现系统PHP包"
-    else
-        log_warning "  ! 发现 ${#system_phps[@]} 个系统PHP包，建议卸载"
-        has_issue=true
-    fi
-    
-    echo
-    log_info "=== 步骤3: 检查Composer配置 ==="
-    
-    if ! command -v composer >/dev/null 2>&1; then
-        log_error "  ✗ 未找到Composer命令"
-        log_info "  建议安装: curl -sS https://getcomposer.org/installer | php"
-        log_info "  然后移动: sudo mv composer.phar /usr/local/bin/composer"
-        return 1
-    fi
-    
-    local composer_path=$(which composer)
-    local composer_is_wrapper=false
-    
-    log_info "  Composer路径: $composer_path"
-    
-    # 检测composer是否是wrapper脚本
-    if [ -f "$composer_path" ]; then
-        local file_type=$(file -b "$composer_path" 2>/dev/null)
-        if [[ "$file_type" == *"shell script"* ]] || [[ "$file_type" == *"bash"* ]] || [[ "$file_type" == *"text"* ]]; then
-            # 检查内容是否包含wrapper特征
-            if grep -q "BaoTa\|wrapper\|exec.*php.*composer" "$composer_path" 2>/dev/null; then
-                composer_is_wrapper=true
-                log_error "  ✗ 检测到Composer是宝塔wrapper脚本"
-                
-                # 查找原始composer
-                if [ -f "/usr/bin/composer.original" ]; then
-                    log_info "  找到原始Composer: /usr/bin/composer.original"
-                elif [ -f "/usr/local/bin/composer.original" ]; then
-                    log_info "  找到原始Composer: /usr/local/bin/composer.original"
-                elif [ -f "${composer_path}.original" ]; then
-                    log_info "  找到原始Composer: ${composer_path}.original"
-                fi
-                has_issue=true
-            else
-                log_info "  Composer是脚本文件，但不是wrapper"
-            fi
-        elif [[ "$file_type" == *"PHP script"* ]] || [[ "$file_type" == *"phar"* ]]; then
-            log_success "  ✓ Composer是PHP/PHAR文件（正常）"
-        fi
-    fi
-    
-    # 测试composer执行
-    if [ -e "/usr/bin/php" ]; then
-        log_info "  测试Composer执行..."
-        
-        # 根据权限选择执行方式
-        local composer_cmd="/usr/bin/php $(which composer) --version"
-        local composer_version=""
-        local composer_error=""
-        
-        if [ "$EUID" -eq 0 ]; then
-            # root权限时，切换到www用户执行
-            log_info "    使用www用户执行composer..."
-            composer_version=$(sudo -u www bash -c "$composer_cmd" 2>&1 | head -1)
-            composer_error=$?
-        else
-            # 非root直接执行
-            composer_version=$(timeout 5s $composer_cmd 2>&1 | head -1)
-            composer_error=$?
-        fi
-        
-        if [ $composer_error -eq 0 ] && [[ "$composer_version" == *"Composer version"* ]]; then
-            log_success "  ✓ Composer可以正常执行"
-            log_info "    $composer_version"
-        else
-            log_error "  ✗ Composer执行失败"
-            log_info "    输出: $composer_version"
-            log_info "    返回码: $composer_error"
-            if [ "$EUID" -eq 0 ]; then
-                log_info "    尝试检查www用户权限和composer文件权限"
-            fi
-            has_issue=true
-        fi
-    fi
-    
-    echo
-    log_info "=== 步骤4: 使用Composer检测扩展 ==="
-    
-    if [ -e "/usr/bin/php" ] && command -v composer >/dev/null 2>&1; then
-        log_info "  执行: composer show --platform"
-        
-        local platform_output=""
-        local platform_cmd="/usr/bin/php $(which composer) show --platform"
-        
-        # 根据权限选择执行方式
-        if [ "$EUID" -eq 0 ]; then
-            log_info "  使用www用户执行扩展检测..."
-            platform_output=$(sudo -u www bash -c "$platform_cmd" 2>&1)
-        else
-            platform_output=$(timeout 10s $platform_cmd 2>&1)
-        fi
-        
-        if [ $? -eq 0 ]; then
-            log_success "  ✓ Composer扩展检测成功"
-            
-            # 检查必需的扩展
-            local required_extensions=(
-                "bcmath" "ctype" "curl" "dom" "fileinfo"
-                "json" "mbstring" "openssl" "pcre" "pdo"
-                "pdo_mysql" "tokenizer" "xml" "zip"
-                "gd" "intl" "redis" "opcache" "iconv" "pcntl"
-            )
-            
-            echo
-            log_info "  必需扩展检测结果:"
-            local missing_extensions=()
-            for ext in "${required_extensions[@]}"; do
-                if echo "$platform_output" | grep -qi "ext-$ext"; then
-                    log_success "    ✓ $ext"
-                else
-                    log_error "    ✗ $ext (缺失)"
-                    missing_extensions+=("$ext")
-                    has_issue=true
-                fi
-            done
-            
-            if [ ${#missing_extensions[@]} -gt 0 ]; then
-                echo
-                log_error "  缺少 ${#missing_extensions[@]} 个扩展: ${missing_extensions[*]}"
-                log_info "  请在宝塔面板中安装缺失的扩展"
-            fi
-        else
-            log_error "  ✗ Composer扩展检测失败"
-            has_issue=true
-        fi
-    fi
-    
-    echo
-    log_info "=== 诊断结果汇总 ==="
-    if [ "$has_issue" = true ]; then
-        log_warning "发现一些问题需要处理："
-        
-        # 提供解决方案
-        if [ ! -e "/usr/bin/php" ] || [[ "$(readlink -f "/usr/bin/php")" != *"/www/server/php"* ]]; then
-            echo
-            log_info "解决方案1: 设置正确的PHP链接"
-            log_info "  请选择一个宝塔PHP版本创建链接："
-            for ver in 85 84 83; do
-                if [ -x "/www/server/php/$ver/bin/php" ]; then
-                    log_info "  sudo ln -sf /www/server/php/$ver/bin/php /usr/bin/php"
-                fi
-            done
-        fi
-        
-        if [ ${#system_phps[@]} -gt 0 ]; then
-            echo
-            log_info "解决方案2: 卸载系统PHP包"
-            log_info "  建议使用主脚本卸载：sudo $0"
-            log_info "  或选择诊断模式中的卸载选项"
-        fi
-        
-        if [ "$composer_is_wrapper" = true ]; then
-            echo
-            log_info "解决方案3: 恢复原始Composer"
-            if [ -f "/usr/bin/composer.original" ]; then
-                log_info "  sudo mv /usr/bin/composer.original /usr/bin/composer"
-            else
-                log_info "  重新安装Composer:"
-                log_info "  curl -sS https://getcomposer.org/installer | php"
-                log_info "  sudo mv composer.phar /usr/local/bin/composer"
-            fi
-        fi
-        
-        return 1
-    else
-        log_success "所有检查通过，PHP环境配置正确！"
-        return 0
-    fi
+    return 1  # 非宝塔环境
 }
 
-# 检测宝塔PHP版本
-detect_bt_php() {
-    log_info "检测宝塔PHP版本..."
-    
-    # 检查可用的PHP版本（只检查8.3及以上版本）
+# 选择宝塔PHP版本
+select_bt_php_version() {
+    # 检查可用的 PHP 8.3+ 版本
     BT_PHP_VERSIONS=()
     for ver in 85 84 83; do
         if [ -d "/www/server/php/$ver" ] && [ -x "/www/server/php/$ver/bin/php" ]; then
@@ -330,14 +91,17 @@ detect_bt_php() {
     done
     
     if [ ${#BT_PHP_VERSIONS[@]} -eq 0 ]; then
-        log_error "未找到宝塔PHP 8.3+版本"
-        log_error "请先在宝塔面板中安装PHP 8.3或更高版本"
+        PHP_CMD=""
+        PHP_VERSION=""
         return 1
-    fi
-    
-    # 如果找到多个版本，让用户选择
-    if [ ${#BT_PHP_VERSIONS[@]} -gt 1 ]; then
-        log_info "检测到多个可用的PHP版本："
+    elif [ ${#BT_PHP_VERSIONS[@]} -eq 1 ]; then
+        # 只有一个版本，直接使用
+        PHP_VERSION="${BT_PHP_VERSIONS[0]}"
+        PHP_CMD="/www/server/php/$PHP_VERSION/bin/php"
+        return 0
+    else
+        # 多个版本，让用户选择
+        log_info "检测到多个可用的 PHP 版本："
         echo
         for i in "${!BT_PHP_VERSIONS[@]}"; do
             local ver="${BT_PHP_VERSIONS[i]}"
@@ -346,146 +110,149 @@ detect_bt_php() {
         echo
         
         while true; do
-            read -p "请选择要使用的PHP版本 (1-${#BT_PHP_VERSIONS[@]}): " -r choice
+            read -p "请选择要使用的 PHP 版本 (1-${#BT_PHP_VERSIONS[@]}): " -r choice
             if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le ${#BT_PHP_VERSIONS[@]} ]; then
                 PHP_VERSION="${BT_PHP_VERSIONS[$((choice-1))]}"
                 PHP_CMD="/www/server/php/$PHP_VERSION/bin/php"
-                log_success "选择了 PHP 8.${PHP_VERSION: -1}"
                 return 0
             else
                 log_error "无效选择，请输入 1-${#BT_PHP_VERSIONS[@]} 之间的数字"
             fi
         done
-    else
-        # 只有一个版本，直接使用
-        PHP_VERSION="${BT_PHP_VERSIONS[0]}"
-        PHP_CMD="/www/server/php/$PHP_VERSION/bin/php"
-        log_success "使用 PHP 8.${PHP_VERSION: -1}"
-        return 0
     fi
-}
-
-# 检查PHP扩展
-check_php_extensions() {
-    log_info "检查PHP扩展..."
-    
-    # 必需的扩展列表
-    local required_extensions=(
-        "bcmath" "ctype" "curl" "dom" "fileinfo"
-        "json" "mbstring" "openssl" "pcre" "pdo"
-        "pdo_mysql" "tokenizer" "xml" "zip"
-    )
-    
-    # 可选但推荐的扩展
-    local optional_extensions=(
-        "gd" "intl" "redis" "opcache"
-    )
-    
-    local missing_required=()
-    local missing_optional=()
-    
-    # 检查必需扩展
-    for ext in "${required_extensions[@]}"; do
-        if ! $PHP_CMD -m 2>/dev/null | grep -qi "^$ext$"; then
-            missing_required+=("$ext")
-        fi
-    done
-    
-    # 检查可选扩展
-    for ext in "${optional_extensions[@]}"; do
-        if ! $PHP_CMD -m 2>/dev/null | grep -qi "^$ext$"; then
-            missing_optional+=("$ext")
-        fi
-    done
-    
-    # 显示结果
-    if [ ${#missing_required[@]} -eq 0 ]; then
-        log_success "所有必需的PHP扩展已安装"
-    else
-        log_error "缺少必需的PHP扩展: ${missing_required[*]}"
-        log_info "请在宝塔面板中为PHP ${PHP_VERSION} 安装这些扩展"
-        return 1
-    fi
-    
-    if [ ${#missing_optional[@]} -gt 0 ]; then
-        log_warning "缺少可选扩展: ${missing_optional[*]}"
-        log_info "建议安装这些扩展以获得更好的性能"
-    fi
-    
-    return 0
 }
 
 # 检查PHP函数
 check_php_functions() {
-    log_info "检查PHP函数..."
+    local required_functions=("exec" "putenv" "pcntl_signal" "pcntl_alarm")
+    local optional_functions=("proc_open")
+    local cli_disabled_required=()
+    local fpm_disabled_required=()
+    local cli_disabled_optional=()
+    local fpm_disabled_optional=()
     
-    # 必需的函数列表
-    local required_functions=(
-        "putenv" "getenv" "proc_open" "proc_get_status"
-        "proc_terminate" "proc_close" "shell_exec" "exec"
-    )
-    
-    local disabled_functions=()
-    
-    # 获取被禁用的函数列表
-    local disabled_list=$($PHP_CMD -r "echo ini_get('disable_functions');" 2>/dev/null)
-    
-    if [ -n "$disabled_list" ]; then
-        # 检查哪些必需的函数被禁用了
-        for func in "${required_functions[@]}"; do
-            if echo "$disabled_list" | grep -q "$func"; then
-                disabled_functions+=("$func")
-            fi
-        done
+    if [ -n "$PHP_VERSION" ]; then
+        local fpm_ini="/www/server/php/$PHP_VERSION/etc/php.ini"
+        local cli_ini="/www/server/php/$PHP_VERSION/etc/php-cli.ini"
+        local php_cmd="/www/server/php/$PHP_VERSION/bin/php"
+        
+        # 检查FPM配置
+        if [ -f "$fpm_ini" ]; then
+            local disabled_funcs=$(grep "^disable_functions" "$fpm_ini" 2>/dev/null | sed 's/disable_functions = //' | tr ',' ' ')
+            for func in "${required_functions[@]}"; do
+                if echo "$disabled_funcs" | grep -q "\\b$func\\b"; then
+                    fpm_disabled_required+=("$func")
+                fi
+            done
+            for func in "${optional_functions[@]}"; do
+                if echo "$disabled_funcs" | grep -q "\\b$func\\b"; then
+                    fpm_disabled_optional+=("$func")
+                fi
+            done
+        fi
+        
+        # 检查CLI配置
+        if [ -f "$cli_ini" ]; then
+            local disabled_funcs=$(grep "^disable_functions" "$cli_ini" 2>/dev/null | sed 's/disable_functions = //' | tr ',' ' ')
+            for func in "${required_functions[@]}"; do
+                if echo "$disabled_funcs" | grep -q "\\b$func\\b"; then
+                    cli_disabled_required+=("$func")
+                fi
+            done
+            for func in "${optional_functions[@]}"; do
+                if echo "$disabled_funcs" | grep -q "\\b$func\\b"; then
+                    cli_disabled_optional+=("$func")
+                fi
+            done
+        fi
     fi
     
-    if [ ${#disabled_functions[@]} -eq 0 ]; then
-        log_success "所有必需的PHP函数已启用"
-    else
-        log_warning "以下PHP函数被禁用: ${disabled_functions[*]}"
-        log_info "系统将尝试自动启用这些函数..."
-        
-        # 尝试自动修改配置
-        if enable_php_functions; then
-            log_success "PHP函数已自动启用"
-        else
-            log_warning "自动启用失败，请手动在宝塔面板中启用这些函数"
-        fi
+    # 导出检测结果
+    export PHP_CLI_DISABLED_REQUIRED="${cli_disabled_required[*]}"
+    export PHP_FPM_DISABLED_REQUIRED="${fpm_disabled_required[*]}"
+    export PHP_CLI_DISABLED_OPTIONAL="${cli_disabled_optional[*]}"
+    export PHP_FPM_DISABLED_OPTIONAL="${fpm_disabled_optional[*]}"
+    
+    # 返回失败条件：任一模式有必需函数被禁用
+    if [ ${#cli_disabled_required[@]} -gt 0 ] || [ ${#fpm_disabled_required[@]} -gt 0 ]; then
+        return 1
     fi
     
     return 0
 }
 
-# 启用PHP函数
-enable_php_functions() {
-    local fpm_ini="/www/server/php/$PHP_VERSION/etc/php.ini"
-    local cli_ini="/www/server/php/$PHP_VERSION/etc/php-cli.ini"
+# 检测PHP扩展
+check_php_extensions() {
+    log_info "检测 PHP 扩展..."
     
-    # 必需的函数列表
-    local required_functions=(
-        "putenv" "getenv" "proc_open" "proc_get_status"
-        "proc_terminate" "proc_close" "shell_exec" "exec"
+    local required_extensions=(
+        "bcmath" "calendar" "ctype" "curl" "dom" "fileinfo"
+        "gd" "iconv" "intl" "json" "mbstring" "openssl"
+        "pcntl" "pcre" "pdo" "pdo_mysql" "redis" "tokenizer" 
+        "xml" "zip"
     )
     
+    local cli_missing=()
+    local fpm_missing=()
+    
+    if [ -n "$PHP_VERSION" ]; then
+        local php_cli="/www/server/php/$PHP_VERSION/bin/php"
+        
+        # 检查CLI模式扩展
+        for ext in "${required_extensions[@]}"; do
+            if ! PHPRC="/www/server/php/$PHP_VERSION/etc/php-cli.ini" $php_cli -m 2>/dev/null | grep -qi "^$ext$"; then
+                cli_missing+=("$ext")
+            fi
+        done
+        
+        # 检查FPM模式扩展
+        for ext in "${required_extensions[@]}"; do
+            if ! PHPRC="/www/server/php/$PHP_VERSION/etc/php.ini" $php_cli -m 2>/dev/null | grep -qi "^$ext$"; then
+                fpm_missing+=("$ext")
+            fi
+        done
+    fi
+    
+    # 导出检测结果
+    export PHP_CLI_MISSING_EXTENSIONS="${cli_missing[*]}"
+    export PHP_FPM_MISSING_EXTENSIONS="${fpm_missing[*]}"
+    export REQUIRED_EXTENSIONS="${required_extensions[*]}"
+    
+    # 返回失败条件
+    if [ ${#cli_missing[@]} -gt 0 ] || [ ${#fpm_missing[@]} -gt 0 ]; then
+        return 1
+    fi
+    
+    return 0
+}
+
+# 自动启用PHP函数
+enable_bt_php_functions() {
+    if [ -z "$PHP_VERSION" ]; then
+        return 1
+    fi
+    
+    local fpm_ini="/www/server/php/$PHP_VERSION/etc/php.ini"
+    local cli_ini="/www/server/php/$PHP_VERSION/etc/php-cli.ini"
+    local required_functions=("exec" "putenv" "pcntl_signal" "pcntl_alarm")
+    local optional_functions=("proc_open")
+    local all_functions=("${required_functions[@]}" "${optional_functions[@]}")
     local modified=false
     
     # 处理FPM配置文件
     if [ -f "$fpm_ini" ]; then
-        # 备份配置文件
         sudo cp "$fpm_ini" "${fpm_ini}.backup.$(date +%Y%m%d%H%M%S)" 2>/dev/null
         
-        # 获取当前禁用的函数列表
         local current_disabled=$(grep "^disable_functions" "$fpm_ini" | sed 's/disable_functions = //')
         
         if [ -n "$current_disabled" ]; then
-            # 构建新的禁用函数列表（移除我们需要的函数）
             local new_disabled=""
             IFS=',' read -ra DISABLED_ARRAY <<< "$current_disabled"
             
             for func in "${DISABLED_ARRAY[@]}"; do
-                func=$(echo "$func" | xargs)  # 去除空格
+                func=$(echo "$func" | xargs)
                 local keep=true
-                for needed_func in "${required_functions[@]}"; do
+                for needed_func in "${all_functions[@]}"; do
                     if [ "$func" = "$needed_func" ]; then
                         keep=false
                         modified=true
@@ -501,28 +268,24 @@ enable_php_functions() {
                 fi
             done
             
-            # 更新配置文件
             sudo sed -i "s/^disable_functions = .*/disable_functions = $new_disabled/" "$fpm_ini" 2>/dev/null
         fi
     fi
     
     # 处理CLI配置文件
     if [ -f "$cli_ini" ]; then
-        # 备份配置文件
         sudo cp "$cli_ini" "${cli_ini}.backup.$(date +%Y%m%d%H%M%S)" 2>/dev/null
         
-        # 获取当前禁用的函数列表
         local current_disabled=$(grep "^disable_functions" "$cli_ini" | sed 's/disable_functions = //')
         
         if [ -n "$current_disabled" ]; then
-            # 构建新的禁用函数列表（移除我们需要的函数）
             local new_disabled=""
             IFS=',' read -ra DISABLED_ARRAY <<< "$current_disabled"
             
             for func in "${DISABLED_ARRAY[@]}"; do
-                func=$(echo "$func" | xargs)  # 去除空格
+                func=$(echo "$func" | xargs)
                 local keep=true
-                for needed_func in "${required_functions[@]}"; do
+                for needed_func in "${all_functions[@]}"; do
                     if [ "$func" = "$needed_func" ]; then
                         keep=false
                         modified=true
@@ -538,14 +301,12 @@ enable_php_functions() {
                 fi
             done
             
-            # 更新配置文件
             sudo sed -i "s/^disable_functions = .*/disable_functions = $new_disabled/" "$cli_ini" 2>/dev/null
         fi
     fi
     
     if [ "$modified" = true ]; then
         # 重启PHP服务
-        log_info "重启PHP服务..."
         sudo systemctl restart php${PHP_VERSION: -2}-fpm 2>/dev/null || \
         sudo /etc/init.d/php-fpm-${PHP_VERSION} restart 2>/dev/null || \
         sudo pkill -f "php-fpm.*php/$PHP_VERSION" 2>/dev/null && sudo /www/server/php/$PHP_VERSION/sbin/php-fpm 2>/dev/null
@@ -556,345 +317,406 @@ enable_php_functions() {
     fi
 }
 
-# 清理所有可能的Composer wrapper
-clean_composer_wrappers() {
-    log_info "检查并清理所有Composer wrapper..."
-    
-    local wrappers_cleaned=0
-    local composer_paths=(
-        "/usr/bin/composer"
-        "/usr/local/bin/composer"
-        "/usr/sbin/composer"
-        "/usr/local/sbin/composer"
-    )
-    
-    for composer_path in "${composer_paths[@]}"; do
-        if [ -f "$composer_path" ]; then
-            # 检查文件类型
-            local file_type=$(file -b "$composer_path" 2>/dev/null)
-            
-            # 如果是脚本文件，检查是否是wrapper
-            if [[ "$file_type" == *"shell script"* ]] || [[ "$file_type" == *"bash"* ]] || [[ "$file_type" == *"text"* ]]; then
-                if grep -q "BaoTa\|wrapper\|/www/server/php" "$composer_path" 2>/dev/null; then
-                    log_warning "发现wrapper: $composer_path"
-                    
-                    # 查找对应的原始文件
-                    local original="${composer_path}.original"
-                    if [ -f "$original" ]; then
-                        log_info "恢复原始文件: $original"
-                        sudo rm -f "$composer_path"
-                        sudo mv "$original" "$composer_path"
-                        sudo chmod +x "$composer_path"
-                        log_success "已恢复: $composer_path"
-                    else
-                        log_info "删除wrapper: $composer_path"
-                        sudo rm -f "$composer_path"
-                    fi
-                    
-                    wrappers_cleaned=$((wrappers_cleaned + 1))
-                fi
-            fi
-        fi
-    done
-    
-    if [ $wrappers_cleaned -gt 0 ]; then
-        log_success "清理了 $wrappers_cleaned 个wrapper"
+# 修复 /usr/bin/php 链接
+fix_bt_composer_php() {
+    if [ -z "$PHP_VERSION" ]; then
         return 0
+    fi
+    
+    local bt_php="/www/server/php/$PHP_VERSION/bin/php"
+    local minimum_php_version="8.3"
+    
+    log_info "检查PHP命令行配置..."
+    
+    # 检查 /usr/bin/php 是否存在且可用
+    if [ ! -e "/usr/bin/php" ]; then
+        log_info "/usr/bin/php 不存在，创建指向宝塔PHP的链接"
     else
-        log_info "未发现wrapper，Composer环境干净"
-        return 0
-    fi
-}
-
-# 安装或重新安装Composer
-install_composer() {
-    log_info "安装Composer..."
-    
-    # 使用国内镜像源（阿里云）
-    local COMPOSER_INSTALL_URL="https://mirrors.aliyun.com/composer/composer.phar"
-    local COMPOSER_INSTALL_BACKUP="https://install.phpcomposer.com/installer"
-    
-    # 先尝试直接下载 composer.phar
-    log_info "从阿里云镜像下载 Composer..."
-    if curl --connect-timeout 10 --max-time 60 -sL "$COMPOSER_INSTALL_URL" -o composer.phar; then
-        if [ -f composer.phar ] && [ -s composer.phar ]; then
-            # 验证下载的文件
-            if $PHP_CMD composer.phar --version >/dev/null 2>&1; then
-                sudo mv composer.phar /usr/local/bin/composer
-                sudo chmod +x /usr/local/bin/composer
-                log_success "Composer 安装成功（阿里云镜像）"
-                return 0
+        # 检查当前PHP是否可用
+        if php_version=$(timeout 3s /usr/bin/php -r "echo PHP_VERSION;" 2>/dev/null); then
+            # 检查是否指向宝塔PHP
+            if [ -L "/usr/bin/php" ]; then
+                local link_target=$(readlink -f "/usr/bin/php")
+                if [[ "$link_target" == *"/www/server/php"* ]]; then
+                    if version_compare "$php_version" "$minimum_php_version"; then
+                        log_success "[OK] /usr/bin/php 配置正确，版本: $php_version (>= $minimum_php_version)"
+                        return 0
+                    else
+                        log_warning "! /usr/bin/php 版本过低: $php_version，需要升级"
+                    fi
+                else
+                    log_warning "! /usr/bin/php 指向系统PHP: $link_target"
+                fi
             else
-                log_warning "下载的 composer.phar 无效"
-                rm -f composer.phar
+                log_warning "! /usr/bin/php 是系统安装的PHP: $php_version"
             fi
+        else
+            log_warning "! /usr/bin/php 存在但无法执行"
         fi
     fi
     
-    # 如果阿里云失败，尝试备用源
-    log_info "尝试备用安装源..."
-    if curl --connect-timeout 10 --max-time 60 -sS "$COMPOSER_INSTALL_BACKUP" | $PHP_CMD; then
-        if [ -f composer.phar ]; then
-            sudo mv composer.phar /usr/local/bin/composer
-            sudo chmod +x /usr/local/bin/composer
-            log_success "Composer 安装成功（备用源）"
+    # 修复链接
+    log_info "设置 /usr/bin/php 指向宝塔PHP $PHP_VERSION..."
+    
+    # 备份原文件
+    if [ -f "/usr/bin/php" ] && [ ! -L "/usr/bin/php" ]; then
+        sudo mv /usr/bin/php /usr/bin/php.system.bak 2>/dev/null || true
+        log_info "已备份系统PHP到 /usr/bin/php.system.bak"
+    fi
+    
+    # 删除现有的链接或文件
+    sudo rm -f /usr/bin/php
+    
+    # 创建新的软链接
+    if sudo ln -s "$bt_php" /usr/bin/php; then
+        log_success "[OK] 已创建软链接: /usr/bin/php -> $bt_php"
+        
+        # 验证
+        if php_version=$(timeout 3s /usr/bin/php -r "echo PHP_VERSION;" 2>/dev/null); then
+            log_success "[OK] 设置成功，PHP版本: $php_version"
+            
+            # 同时处理php-config和phpize
+            sudo rm -f /usr/bin/php-config /usr/bin/phpize
+            sudo ln -s "/www/server/php/$PHP_VERSION/bin/php-config" /usr/bin/php-config 2>/dev/null || true
+            sudo ln -s "/www/server/php/$PHP_VERSION/bin/phpize" /usr/bin/phpize 2>/dev/null || true
+            
             return 0
+        else
+            log_error "设置后验证失败"
+            return 1
         fi
+    else
+        log_error "创建软链接失败"
+        return 1
     fi
-    
-    # 最后尝试官方源
-    log_info "尝试官方源（可能较慢）..."
-    if curl --connect-timeout 10 --max-time 60 -sS https://getcomposer.org/installer | $PHP_CMD; then
-        if [ -f composer.phar ]; then
-            sudo mv composer.phar /usr/local/bin/composer
-            sudo chmod +x /usr/local/bin/composer
-            log_success "Composer 安装成功（官方源）"
-            return 0
-        fi
-    fi
-    
-    log_error "Composer 安装失败，请检查网络连接"
-    return 1
 }
 
-# 检查并修复Composer
+# 检查Composer
 check_composer() {
     log_info "检查Composer..."
     
-    # 确保PHP_CMD已设置
-    if [ -z "$PHP_CMD" ]; then
-        log_warning "PHP_CMD未设置，尝试使用默认PHP"
-        if [ -x "/usr/bin/php" ]; then
-            PHP_CMD="/usr/bin/php"
-        else
-            log_error "无法找到可用的PHP命令"
-            return 1
-        fi
-    fi
-    
-    # 首先主动清理所有wrapper
-    clean_composer_wrappers
-    
-    local need_reinstall=false
-    
     if command -v composer >/dev/null 2>&1; then
-        local composer_path=$(which composer)
+        export COMPOSER_NO_INTERACTION=1
+        export COMPOSER_ALLOW_SUPERUSER=1
         
-        # 检查是否是wrapper脚本
-        if [ -f "$composer_path" ]; then
-            # 检查文件类型
-            local file_type=$(file -b "$composer_path" 2>/dev/null)
-            
-            # 如果是脚本文件，检查内容
-            if [[ "$file_type" == *"shell script"* ]] || [[ "$file_type" == *"bash"* ]] || [[ "$file_type" == *"text"* ]]; then
-                # 检查是否包含wrapper特征
-                if grep -q "BaoTa\|wrapper\|/www/server/php" "$composer_path" 2>/dev/null; then
-                    log_warning "检测到Composer是宝塔wrapper脚本"
-                    log_info "正在清理wrapper并恢复Composer..."
-                    
-                    # 查找原始composer
-                    local original_found=false
-                    for orig in "/usr/bin/composer.original" "/usr/local/bin/composer.original" "${composer_path}.original"; do
-                        if [ -f "$orig" ]; then
-                            log_info "找到原始Composer: $orig"
-                            log_info "恢复原始Composer..."
-                            sudo rm -f "$composer_path"  # 先删除wrapper
-                            sudo mv "$orig" "$composer_path"
-                            sudo chmod +x "$composer_path"
-                            original_found=true
-                            log_success "已恢复原始Composer"
-                            break
-                        fi
-                    done
-                    
-                    if [ "$original_found" = false ]; then
-                        log_warning "未找到原始Composer，清理wrapper并重新安装"
-                        # 删除wrapper
-                        sudo rm -f "$composer_path"
-                        log_info "已删除wrapper: $composer_path"
-                        need_reinstall=true
-                    fi
-                fi
-            fi
-        fi
+        local composer_output=$(timeout -k 3s 10s composer --version 2>&1 | grep -v "Deprecated\|Warning" | head -1)
+        local exit_code=$?
         
-        # 如果不需要重新安装，验证版本
-        if [ "$need_reinstall" = false ]; then
-            # 使用PHP_CMD明确执行composer，避免wrapper问题
-            local composer_version=""
-            if [ -f "$composer_path" ]; then
-                # 处理权限问题：如果是root用户，使用sudo -u www执行
-                if [ "$EUID" -eq 0 ]; then
-                    # 使用www用户执行，避免权限问题
-                    composer_version=$(timeout 5s sudo -u www $PHP_CMD "$composer_path" --version 2>/dev/null | head -1)
-                else
-                    # 非root直接执行
-                    composer_version=$(timeout 5s $PHP_CMD "$composer_path" --version 2>/dev/null | head -1)
-                fi
-            fi
-            
+        if [ $exit_code -eq 124 ]; then
+            log_warning "Composer 执行超时，可能存在网络问题"
+            return 1
+        elif [ -n "$composer_output" ]; then
+            local composer_version=$(echo "$composer_output" | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' | head -1)
             if [ -n "$composer_version" ]; then
-                log_success "Composer已安装: $composer_version"
+                log_success "Composer $composer_version 已安装"
                 
-                # 配置中国镜像源（处理权限问题）
-                log_info "配置Composer中国镜像源..."
-                
-                # 检查并修复composer配置目录权限
-                local composer_home="${COMPOSER_HOME:-$HOME/.config/composer}"
-                if [ ! -d "$composer_home" ]; then
-                    composer_home="$HOME/.composer"
+                if ! version_compare "$composer_version" "2.8.0"; then
+                    log_warning "Composer 版本 $composer_version 低于推荐版本 2.8.0"
+                    return 1
                 fi
-                
-                # 如果配置目录存在且是root权限，修复权限
-                if [ -d "$composer_home" ] && [ "$(stat -c %U "$composer_home")" = "root" ]; then
-                    log_info "修复Composer配置目录权限..."
-                    sudo chown -R "$USER:$USER" "$composer_home" 2>/dev/null || true
-                fi
-                
-                # 使用sudo -u避免权限问题
-                if [ "$EUID" -eq 0 ]; then
-                    # root用户执行，切换到www用户
-                    sudo -u www $PHP_CMD "$composer_path" config -g repo.packagist composer https://mirrors.aliyun.com/composer/ 2>/dev/null || true
-                    sudo -u www $PHP_CMD "$composer_path" config -g use-parent-dir true 2>/dev/null || true
-                else
-                    # 普通用户直接执行
-                    $PHP_CMD "$composer_path" config -g repo.packagist composer https://mirrors.aliyun.com/composer/ 2>/dev/null || true
-                    $PHP_CMD "$composer_path" config -g use-parent-dir true 2>/dev/null || true
-                fi
-                log_success "已配置阿里云Composer镜像"
-                
                 return 0
-            else
-                log_warning "Composer命令存在但无法执行"
-                need_reinstall=true
             fi
         fi
     else
         log_warning "Composer未安装"
-        need_reinstall=true
+        return 1
     fi
-    
-    # 如果需要重新安装
-    if [ "$need_reinstall" = true ]; then
-        if install_composer; then
-            # 配置中国镜像源（处理权限问题）
-            log_info "配置Composer中国镜像源..."
-            local new_composer_path="/usr/local/bin/composer"
-            if [ -f "$new_composer_path" ]; then
-                # 检查并修复composer配置目录权限
-                local composer_home="${COMPOSER_HOME:-$HOME/.config/composer}"
-                if [ ! -d "$composer_home" ]; then
-                    composer_home="$HOME/.composer"
-                fi
-                
-                # 如果配置目录存在且是root权限，修复权限
-                if [ -d "$composer_home" ] && [ "$(stat -c %U "$composer_home")" = "root" ]; then
-                    log_info "修复Composer配置目录权限..."
-                    sudo chown -R "$USER:$USER" "$composer_home" 2>/dev/null || true
-                fi
-                
-                # 使用sudo -u避免权限问题
-                if [ "$EUID" -eq 0 ]; then
-                    # root用户执行，切换到www用户
-                    sudo -u www $PHP_CMD "$new_composer_path" config -g repo.packagist composer https://mirrors.aliyun.com/composer/ 2>/dev/null || true
-                    sudo -u www $PHP_CMD "$new_composer_path" config -g use-parent-dir true 2>/dev/null || true
-                else
-                    # 普通用户直接执行
-                    $PHP_CMD "$new_composer_path" config -g repo.packagist composer https://mirrors.aliyun.com/composer/ 2>/dev/null || true
-                    $PHP_CMD "$new_composer_path" config -g use-parent-dir true 2>/dev/null || true
-                fi
-                log_success "已配置阿里云Composer镜像"
-            fi
-            return 0
-        else
-            return 1
-        fi
-    fi
-    
-    return 0
 }
 
-# 设置默认PHP版本
-set_default_php() {
-    log_info "设置默认PHP版本..."
+# 安装或更新Composer
+install_or_update_composer() {
+    log_info "安装或更新 Composer..."
     
-    # 创建/更新软链接
-    if [ -e "/usr/bin/php" ]; then
-        sudo rm -f /usr/bin/php
-    fi
+    cd /tmp
+    rm -f composer-setup.php composer.phar
     
-    sudo ln -sf "/www/server/php/$PHP_VERSION/bin/php" /usr/bin/php
-    
-    # 验证
-    local current_version=$(/usr/bin/php -v 2>/dev/null | head -1)
-    log_success "默认PHP已设置: $current_version"
-    
-    return 0
-}
-
-# 卸载系统PHP
-remove_system_php() {
-    log_info "检查系统PHP包..."
-    
-    local system_php_paths=(
-        "/usr/bin/php8.4"
-        "/usr/bin/php8.3"
-        "/usr/bin/php8.2"
-        "/usr/bin/php8.1"
-        "/usr/bin/php8.0"
-        "/usr/bin/php7.4"
+    # 使用国内镜像下载
+    local installer_urls=(
+        "https://mirrors.aliyun.com/composer/composer.phar"
+        "https://mirrors.tencent.com/composer/composer.phar"
+        "https://getcomposer.org/installer"
     )
     
-    local found_system_php=false
-    for php_path in "${system_php_paths[@]}"; do
-        if [ -x "$php_path" ] && [[ "$(readlink -f "$php_path")" != *"/www/server/php"* ]]; then
-            found_system_php=true
-            log_warning "发现系统PHP: $php_path"
+    local download_success=false
+    
+    for url in "${installer_urls[@]}"; do
+        log_info "尝试从 $url 下载..."
+        
+        if [[ "$url" == *".phar" ]]; then
+            if timeout 30s curl -sS "$url" -o composer.phar; then
+                if /usr/bin/php composer.phar --version >/dev/null 2>&1; then
+                    log_success "下载 composer.phar 成功"
+                    download_success=true
+                    break
+                fi
+            fi
+        else
+            if timeout 30s curl -sS "$url" -o composer-setup.php; then
+                if /usr/bin/php composer-setup.php --quiet; then
+                    rm -f composer-setup.php
+                    log_success "安装脚本执行成功"
+                    download_success=true
+                    break
+                fi
+            fi
         fi
     done
     
-    if [ "$found_system_php" = false ]; then
-        log_success "未发现系统PHP包"
-        return 0
+    if [ "$download_success" = false ]; then
+        log_error "所有下载源都失败了"
+        return 1
+    fi
+    
+    # 移动到系统目录
+    if sudo mv composer.phar /usr/local/bin/composer 2>/dev/null && sudo chmod +x /usr/local/bin/composer 2>/dev/null; then
+        log_success "Composer 安装到 /usr/local/bin/composer"
+    else
+        log_error "无法安装 Composer"
+        return 1
+    fi
+    
+    # 配置中国镜像源
+    log_info "配置 Composer 中国镜像源..."
+    composer config -g repo.packagist composer https://mirrors.aliyun.com/composer/ 2>/dev/null || true
+    
+    # 验证安装
+    local final_version=$(composer --version 2>&1 | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' | head -1)
+    if [ -n "$final_version" ]; then
+        log_success "Composer $final_version 安装成功"
+    fi
+}
+
+# 深度诊断
+diagnose_php_extension_issues() {
+    log_info "运行PHP扩展深度诊断模式..."
+    
+    if [ "$EUID" -eq 0 ]; then
+        log_info "以root权限运行（正常）"
+    else
+        log_warning "非root权限运行，某些检测可能失败"
+    fi
+    
+    if ! check_bt_panel; then
+        log_error "未检测到宝塔环境，此脚本专用于宝塔面板"
+        return 1
+    fi
+    
+    if ! select_bt_php_version; then
+        log_error "未找到PHP 8.3+版本"
+        return 1
+    fi
+    
+    local has_issue=false
+    
+    echo
+    log_info "=== 步骤1: 检查 /usr/bin/php 配置 ==="
+    
+    if [ -e "/usr/bin/php" ]; then
+        local php_version=$(timeout 3s /usr/bin/php -r "echo PHP_VERSION;" 2>/dev/null || echo "unknown")
+        local real_path=$(readlink -f "/usr/bin/php" 2>/dev/null || echo "/usr/bin/php")
+        
+        log_info "  当前PHP: /usr/bin/php -> $real_path"
+        log_info "  PHP版本: $php_version"
+        
+        if [[ "$real_path" == *"/www/server/php"* ]]; then
+            if [ "$php_version" != "unknown" ] && version_compare "$php_version" "8.3"; then
+                log_success "  [OK] /usr/bin/php 配置正确"
+            else
+                log_warning "  ! PHP版本过低: $php_version"
+                has_issue=true
+            fi
+        else
+            log_error "  [FAIL] /usr/bin/php 不是宝塔PHP"
+            has_issue=true
+        fi
+    else
+        log_warning "  ! /usr/bin/php 不存在"
+        has_issue=true
     fi
     
     echo
-    log_warning "发现系统PHP包，可能会与宝塔PHP冲突"
-    read -p "是否卸载系统PHP包？(y/n): " -n 1 -r
-    echo
+    log_info "=== 步骤2: 检查Composer配置 ==="
     
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        # 根据系统类型卸载
-        if command -v apt-get >/dev/null 2>&1; then
-            # Ubuntu/Debian
-            log_info "卸载系统PHP包..."
-            sudo apt-get remove -y php* --purge 2>/dev/null || true
-            sudo apt-get autoremove -y 2>/dev/null || true
-        elif command -v yum >/dev/null 2>&1; then
-            # CentOS/RHEL
-            log_info "卸载系统PHP包..."
-            sudo yum remove -y php* 2>/dev/null || true
+    if ! command -v composer >/dev/null 2>&1; then
+        log_error "  [FAIL] 未找到Composer命令"
+        has_issue=true
+    else
+        local composer_path=$(which composer)
+        log_info "  Composer路径: $composer_path"
+        
+        local composer_version=$(timeout 5s /usr/bin/php $(which composer) --version 2>&1 | head -1)
+        if [ $? -eq 0 ] && [[ "$composer_version" == *"Composer version"* ]]; then
+            log_success "  [OK] Composer可以正常执行"
+            log_info "    $composer_version"
+        else
+            log_error "  [FAIL] Composer执行失败"
+            has_issue=true
+        fi
+    fi
+    
+    echo
+    log_info "=== 诊断总结 ==="
+    
+    if [ "$has_issue" = true ]; then
+        log_error "发现问题，需要修复："
+        
+        echo
+        read -p "是否自动修复这些问题？(y/n): " -n 1 -r choice < /dev/tty
+        echo
+        
+        if [[ $choice =~ ^[Yy]$ ]]; then
+            fix_bt_composer_php
+            install_or_update_composer
+            log_success "修复完成"
+        else
+            log_info "跳过自动修复"
+        fi
+    else
+        log_success "[OK] PHP和Composer配置正确"
+    fi
+}
+
+# 处理宝塔面板环境
+handle_bt_panel() {
+    if select_bt_php_version; then
+        echo
+        log_success "检测到 PHP 8.${PHP_VERSION: -1}"
+        
+        # 1. 处理PHP函数
+        local functions_ok=true
+        if ! check_php_functions; then
+            if enable_bt_php_functions && check_php_functions; then
+                log_success "PHP函数已自动启用"
+            else
+                functions_ok=false
+            fi
         fi
         
-        log_success "系统PHP包已卸载"
+        # 2. 检测所有函数和扩展状态
+        echo
+        log_info "校验PHP函数和扩展..."
+        echo
+        
+        check_php_functions >/dev/null 2>&1 || true
+        check_php_extensions >/dev/null 2>&1 || true
+        
+        # 校验PHP函数
+        log_info "PHP函数检查:"
+        local required_functions=("exec" "putenv" "pcntl_signal" "pcntl_alarm")
+        local optional_functions=("proc_open")
+        
+        local cli_disabled_required=($PHP_CLI_DISABLED_REQUIRED)
+        local fpm_disabled_required=($PHP_FPM_DISABLED_REQUIRED)
+        local cli_disabled_optional=($PHP_CLI_DISABLED_OPTIONAL)
+        local fpm_disabled_optional=($PHP_FPM_DISABLED_OPTIONAL)
+        
+        for func in "${required_functions[@]}"; do
+            local cli_status="[OK]"
+            local fpm_status="[OK]"
+            
+            if [[ " ${cli_disabled_required[*]} " =~ " ${func} " ]]; then
+                cli_status="[DISABLED]"
+            fi
+            
+            if [[ " ${fpm_disabled_required[*]} " =~ " ${func} " ]]; then
+                fpm_status="[DISABLED]"
+            fi
+            
+            if [ "$cli_status" = "[OK]" ] && [ "$fpm_status" = "[OK]" ]; then
+                log_success "  $(printf '%-15s' "$func"): CLI $cli_status, FPM $fpm_status"
+            else
+                log_warning "  $(printf '%-15s' "$func"): CLI $cli_status, FPM $fpm_status (必需)"
+            fi
+        done
+        
+        for func in "${optional_functions[@]}"; do
+            local cli_status="[OK]"
+            local fpm_status="[OK]"
+            
+            if [[ " ${cli_disabled_optional[*]} " =~ " ${func} " ]]; then
+                cli_status="[DISABLED]"
+            fi
+            
+            if [[ " ${fpm_disabled_optional[*]} " =~ " ${func} " ]]; then
+                fpm_status="[DISABLED]"
+            fi
+            
+            if [ "$cli_status" = "[OK]" ] && [ "$fpm_status" = "[OK]" ]; then
+                log_success "  $(printf '%-15s' "$func"): CLI $cli_status, FPM $fpm_status (可选)"
+            else
+                log_info "  $(printf '%-15s' "$func"): CLI $cli_status, FPM $fpm_status (可选)"
+            fi
+        done
+        
+        echo
+        log_info "PHP扩展检查:"
+        
+        local cli_missing_extensions=($PHP_CLI_MISSING_EXTENSIONS)
+        local fpm_missing_extensions=($PHP_FPM_MISSING_EXTENSIONS)
+        local required_extensions_array=($REQUIRED_EXTENSIONS)
+        
+        # 需要手动安装的扩展
+        local manual_extensions=("calendar" "fileinfo" "mbstring" "redis")
+        
+        for ext in "${required_extensions_array[@]}"; do
+            local cli_status="[OK]"
+            local fpm_status="[OK]"
+            local is_manual=false
+            
+            # 检查是否是手动安装扩展
+            for manual_ext in "${manual_extensions[@]}"; do
+                if [ "$ext" = "$manual_ext" ]; then
+                    is_manual=true
+                    break
+                fi
+            done
+            
+            if [[ " ${cli_missing_extensions[*]} " =~ " ${ext} " ]]; then
+                cli_status="[MISSING]"
+            fi
+            
+            if [[ " ${fpm_missing_extensions[*]} " =~ " ${ext} " ]]; then
+                fpm_status="[MISSING]"
+            fi
+            
+            if [ "$cli_status" = "[OK]" ] && [ "$fpm_status" = "[OK]" ]; then
+                log_success "  $(printf '%-12s' "$ext"): CLI $cli_status, FPM $fpm_status"
+            else
+                if [ "$is_manual" = true ]; then
+                    log_warning "  $(printf '%-12s' "$ext"): CLI $cli_status, FPM $fpm_status (需在宝塔面板手动安装)"
+                else
+                    log_error "  $(printf '%-12s' "$ext"): CLI $cli_status, FPM $fpm_status"
+                fi
+            fi
+        done
+        
+        # 显示安装指引
+        if [ ${#cli_missing_extensions[@]} -gt 0 ] || [ ${#fpm_missing_extensions[@]} -gt 0 ]; then
+            echo
+            log_warning "=== 需要在宝塔面板中安装扩展 ==="
+            log_warning "1. 登录宝塔面板"
+            log_warning "2. 进入【软件商店】->【已安装】"
+            log_warning "3. 找到 PHP-${PHP_VERSION: -1}.${PHP_VERSION: -1}"
+            log_warning "4. 点击【设置】->【安装扩展】"
+            log_warning "5. 安装缺失的扩展"
+        fi
+        
+    else
+        log_warning "未检测到 PHP 8.3 或更高版本"
+        
+        echo
+        log_warning "=== 需要在宝塔面板中安装PHP ==="
+        log_warning "1. 登录宝塔面板"
+        log_warning "2. 进入【软件商店】->【运行环境】"
+        log_warning "3. 安装 PHP 8.3 或更高版本"
+        log_warning "4. 安装完成后重新运行此脚本"
     fi
-    
-    return 0
 }
 
 # 主函数
 main() {
-    # 检查是否为宝塔环境
-    if ! check_bt_panel; then
-        log_error "未检测到宝塔环境"
-        log_info "此脚本专用于宝塔面板环境"
-        log_info "如果您使用的是普通Linux环境，请使用: ./install-deps.sh"
-        exit 1
-    fi
-    
     # 参数解析
     local run_diagnose=false
-    local clean_composer=false
     
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -906,10 +728,6 @@ main() {
                 run_diagnose=true
                 shift
                 ;;
-            -c|--clean-composer)
-                clean_composer=true
-                shift
-                ;;
             *)
                 log_error "未知参数: $1"
                 show_help
@@ -918,61 +736,54 @@ main() {
         esac
     done
     
-    # 如果是清理Composer模式
-    if [ "$clean_composer" = true ]; then
-        log_info "============================================"
-        log_info "清理Composer Wrapper"
-        log_info "============================================"
-        echo
-        clean_composer_wrappers
-        echo
-        log_success "清理完成"
-        exit 0
+    # 检测宝塔环境
+    if ! check_bt_panel; then
+        log_error "未检测到宝塔面板环境"
+        log_info "此脚本专用于宝塔面板，请使用 install-deps.sh 进行通用安装"
+        exit 1
     fi
     
-    # 如果是诊断模式，只运行诊断
+    log_info "检测到宝塔面板环境"
+    
+    # 如果是诊断模式
     if [ "$run_diagnose" = true ]; then
         if diagnose_php_extension_issues; then
             log_success "诊断完成"
         else
             log_error "诊断失败"
         fi
-        exit 0
+        return 0
     fi
     
-    log_info "============================================"
-    log_info "证书管理系统宝塔环境依赖检查"
-    log_info "============================================"
-    echo
+    # 正常模式
+    handle_bt_panel
     
-    # 检测PHP版本
-    if ! detect_bt_php; then
-        exit 1
+    # 检查 Composer
+    echo
+    log_info "检查 Composer..."
+    
+    # 先修复PHP链接
+    if select_bt_php_version; then
+        fix_bt_composer_php
     fi
     
-    # 检查并卸载系统PHP
-    remove_system_php
+    if ! check_composer; then
+        log_info "自动安装 Composer..."
+        install_or_update_composer
+    fi
     
-    # 设置默认PHP版本
-    set_default_php
+    # 最终提示
+    echo
+    log_success "环境检查完成"
     
-    # 检查PHP扩展
-    check_php_extensions
-    
-    # 检查PHP函数
-    check_php_functions
-    
-    # 检查Composer
-    check_composer
+    if [ -n "$PHP_VERSION" ]; then
+        log_info "PHP 版本: PHP 8.${PHP_VERSION: -1}"
+        log_info "PHP 路径: /www/server/php/$PHP_VERSION/bin/php"
+    fi
     
     echo
-    log_success "============================================"
-    log_success "宝塔环境依赖检查完成"
-    log_success "============================================"
-    echo
-    log_info "如果还有问题，可以运行诊断模式："
-    log_info "  sudo $0 --diagnose"
-    echo
+    log_info "如果composer install报错，可运行深度诊断："
+    log_info "  $0 --diagnose"
 }
 
 # 执行主函数
