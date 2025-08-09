@@ -38,11 +38,13 @@ show_help() {
     echo "选项:"
     echo "  -h, --help       显示此帮助信息"
     echo "  -d, --diagnose   运行PHP扩展深度诊断（用于排查composer install扩展报错）"
+    echo "  -c, --clean-composer   清理所有Composer wrapper并恢复原始文件"
     echo ""
     echo "示例:"
     echo "  $0               # 正常运行依赖检查和安装"
     echo "  $0 --diagnose    # 仅运行深度诊断"
     echo "  $0 -d            # 简写形式的深度诊断"
+    echo "  $0 --clean-composer  # 清理Composer wrapper"
     echo ""
 }
 
@@ -554,6 +556,56 @@ enable_php_functions() {
     fi
 }
 
+# 清理所有可能的Composer wrapper
+clean_composer_wrappers() {
+    log_info "检查并清理所有Composer wrapper..."
+    
+    local wrappers_cleaned=0
+    local composer_paths=(
+        "/usr/bin/composer"
+        "/usr/local/bin/composer"
+        "/usr/sbin/composer"
+        "/usr/local/sbin/composer"
+    )
+    
+    for composer_path in "${composer_paths[@]}"; do
+        if [ -f "$composer_path" ]; then
+            # 检查文件类型
+            local file_type=$(file -b "$composer_path" 2>/dev/null)
+            
+            # 如果是脚本文件，检查是否是wrapper
+            if [[ "$file_type" == *"shell script"* ]] || [[ "$file_type" == *"bash"* ]] || [[ "$file_type" == *"text"* ]]; then
+                if grep -q "BaoTa\|wrapper\|/www/server/php" "$composer_path" 2>/dev/null; then
+                    log_warning "发现wrapper: $composer_path"
+                    
+                    # 查找对应的原始文件
+                    local original="${composer_path}.original"
+                    if [ -f "$original" ]; then
+                        log_info "恢复原始文件: $original"
+                        sudo rm -f "$composer_path"
+                        sudo mv "$original" "$composer_path"
+                        sudo chmod +x "$composer_path"
+                        log_success "已恢复: $composer_path"
+                    else
+                        log_info "删除wrapper: $composer_path"
+                        sudo rm -f "$composer_path"
+                    fi
+                    
+                    wrappers_cleaned=$((wrappers_cleaned + 1))
+                fi
+            fi
+        fi
+    done
+    
+    if [ $wrappers_cleaned -gt 0 ]; then
+        log_success "清理了 $wrappers_cleaned 个wrapper"
+        return 0
+    else
+        log_info "未发现wrapper，Composer环境干净"
+        return 0
+    fi
+}
+
 # 安装或重新安装Composer
 install_composer() {
     log_info "安装Composer..."
@@ -620,6 +672,9 @@ check_composer() {
         fi
     fi
     
+    # 首先主动清理所有wrapper
+    clean_composer_wrappers
+    
     local need_reinstall=false
     
     if command -v composer >/dev/null 2>&1; then
@@ -635,6 +690,7 @@ check_composer() {
                 # 检查是否包含wrapper特征
                 if grep -q "BaoTa\|wrapper\|/www/server/php" "$composer_path" 2>/dev/null; then
                     log_warning "检测到Composer是宝塔wrapper脚本"
+                    log_info "正在清理wrapper并恢复Composer..."
                     
                     # 查找原始composer
                     local original_found=false
@@ -642,17 +698,21 @@ check_composer() {
                         if [ -f "$orig" ]; then
                             log_info "找到原始Composer: $orig"
                             log_info "恢复原始Composer..."
+                            sudo rm -f "$composer_path"  # 先删除wrapper
                             sudo mv "$orig" "$composer_path"
+                            sudo chmod +x "$composer_path"
                             original_found=true
+                            log_success "已恢复原始Composer"
                             break
                         fi
                     done
                     
                     if [ "$original_found" = false ]; then
-                        log_warning "未找到原始Composer，需要重新安装"
-                        need_reinstall=true
+                        log_warning "未找到原始Composer，清理wrapper并重新安装"
                         # 删除wrapper
                         sudo rm -f "$composer_path"
+                        log_info "已删除wrapper: $composer_path"
+                        need_reinstall=true
                     fi
                 fi
             fi
@@ -834,6 +894,7 @@ main() {
     
     # 参数解析
     local run_diagnose=false
+    local clean_composer=false
     
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -845,6 +906,10 @@ main() {
                 run_diagnose=true
                 shift
                 ;;
+            -c|--clean-composer)
+                clean_composer=true
+                shift
+                ;;
             *)
                 log_error "未知参数: $1"
                 show_help
@@ -852,6 +917,18 @@ main() {
                 ;;
         esac
     done
+    
+    # 如果是清理Composer模式
+    if [ "$clean_composer" = true ]; then
+        log_info "============================================"
+        log_info "清理Composer Wrapper"
+        log_info "============================================"
+        echo
+        clean_composer_wrappers
+        echo
+        log_success "清理完成"
+        exit 0
+    fi
     
     # 如果是诊断模式，只运行诊断
     if [ "$run_diagnose" = true ]; then
