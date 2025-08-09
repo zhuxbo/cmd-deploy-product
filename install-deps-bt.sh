@@ -391,6 +391,149 @@ fix_bt_composer_php() {
     fi
 }
 
+# 修复Composer wrapper问题
+fix_composer_wrapper() {
+    local composer_path=$(which composer)
+    
+    if [ ! -f "$composer_path" ]; then
+        log_error "找不到composer路径"
+        return 1
+    fi
+    
+    # 查找原始composer
+    local original_composer=""
+    if [ -f "/usr/bin/composer.original" ]; then
+        original_composer="/usr/bin/composer.original"
+    elif [ -f "/usr/local/bin/composer.original" ]; then
+        original_composer="/usr/local/bin/composer.original"
+    elif [ -f "${composer_path}.original" ]; then
+        original_composer="${composer_path}.original"
+    fi
+    
+    if [ -n "$original_composer" ] && [ -f "$original_composer" ]; then
+        log_info "恢复原始Composer: $original_composer -> $composer_path"
+        sudo rm -f "$composer_path"
+        sudo mv "$original_composer" "$composer_path"
+        sudo chmod +x "$composer_path"
+        log_success "Composer已恢复为原始版本"
+        return 0
+    else
+        log_info "未找到原始Composer，重新安装..."
+        
+        # 备份现有composer
+        if [ -f "$composer_path" ]; then
+            sudo mv "$composer_path" "${composer_path}.bak"
+        fi
+        
+        # 重新下载安装
+        local temp_file="/tmp/composer_installer_$$.php"
+        if curl -sS https://getcomposer.org/installer -o "$temp_file"; then
+            if /usr/bin/php "$temp_file" --install-dir=/usr/local/bin --filename=composer 2>/dev/null; then
+                rm -f "$temp_file"
+                log_success "Composer重新安装成功"
+                return 0
+            fi
+        fi
+        
+        rm -f "$temp_file"
+        log_error "Composer重新安装失败"
+        return 1
+    fi
+}
+
+# 卸载冲突的系统PHP
+remove_system_php() {
+    log_info "分析冲突的系统PHP包..."
+    
+    # 检测系统包管理器
+    if command -v apt-get >/dev/null 2>&1; then
+        # Ubuntu/Debian系统
+        
+        # 检查哪些包提供了冲突的PHP命令
+        local conflicting_packages=()
+        local php_commands=("/usr/bin/php8.4" "/usr/bin/php8.3" "/usr/bin/php8.2" "/usr/bin/php8.1" "/usr/bin/php8.0" "/usr/bin/php7.4")
+        
+        for cmd in "${php_commands[@]}"; do
+            if [ -x "$cmd" ]; then
+                # 查找哪个包提供了这个命令
+                local package=""
+                package=$(dpkg -S "$cmd" 2>/dev/null | cut -d: -f1 | head -1)
+                if [ -n "$package" ] && [[ ! " ${conflicting_packages[*]} " =~ " $package " ]]; then
+                    conflicting_packages+=("$package")
+                    log_info "  冲突命令 $cmd 由包 $package 提供"
+                fi
+            fi
+        done
+        
+        # 也检查一些常见的PHP核心包
+        local common_php_packages=("php" "php-cli" "php-common" "php-fpm")
+        for pkg in "${common_php_packages[@]}"; do
+            if dpkg -l | grep -q "^ii.*$pkg[[:space:]]"; then
+                conflicting_packages+=("$pkg")
+                log_info "  发现系统PHP包: $pkg"
+            fi
+        done
+        
+        if [ ${#conflicting_packages[@]} -gt 0 ]; then
+            echo
+            log_warning "发现 ${#conflicting_packages[@]} 个冲突的系统PHP包："
+            printf "  - %s\n" "${conflicting_packages[@]}"
+            echo
+            
+            log_warning "注意：卸载这些包可能影响依赖它们的其他软件！"
+            log_info "这些包会与宝塔PHP产生冲突，影响Composer正常工作。"
+            echo
+            read -p "确定要卸载这些冲突的PHP包吗？(y/N): " -n 1 -r confirm < /dev/tty
+            echo
+            
+            if [[ $confirm =~ ^[Yy]$ ]]; then
+                log_info "开始卸载冲突的系统PHP包..."
+                if sudo apt-get remove --autoremove -y "${conflicting_packages[@]}" >/dev/null 2>&1; then
+                    log_success "系统PHP包已成功卸载"
+                    
+                    # 清理残留配置
+                    sudo apt-get autoremove -y >/dev/null 2>&1
+                    sudo apt-get autoclean >/dev/null 2>&1
+                    
+                    # 验证卸载结果
+                    local remaining_conflicts=0
+                    for cmd in "${php_commands[@]}"; do
+                        if [ -x "$cmd" ]; then
+                            log_warning "  残留命令: $cmd"
+                            remaining_conflicts=$((remaining_conflicts + 1))
+                        fi
+                    done
+                    
+                    if [ $remaining_conflicts -eq 0 ]; then
+                        log_success "验证通过：冲突的系统PHP命令已移除"
+                        return 0
+                    else
+                        log_warning "仍有 $remaining_conflicts 个冲突命令残留，但主要问题应已解决"
+                        return 0
+                    fi
+                else
+                    log_error "卸载过程中出现错误"
+                    return 1
+                fi
+            else
+                log_info "用户取消卸载操作"
+                return 1
+            fi
+        else
+            log_info "未发现系统PHP包（可能是手动安装的）"
+            return 1
+        fi
+    elif command -v yum >/dev/null 2>&1 || command -v dnf >/dev/null 2>&1; then
+        # CentOS/RHEL/Fedora系统
+        log_warning "检测到RedHat系系统，请手动卸载PHP包："
+        log_info "  yum remove php php-* 或 dnf remove php php-*"
+        return 1
+    else
+        log_warning "未知的包管理器，无法自动卸载"
+        return 1
+    fi
+}
+
 # 检查Composer
 check_composer() {
     log_info "检查Composer..."
@@ -492,6 +635,7 @@ diagnose_php_extension_issues() {
     
     if [ "$EUID" -eq 0 ]; then
         log_info "以root权限运行（正常）"
+        log_info "提示：Composer命令将使用www用户执行"
     else
         log_warning "非root权限运行，某些检测可能失败"
     fi
@@ -506,11 +650,17 @@ diagnose_php_extension_issues() {
         return 1
     fi
     
+    local minimum_php_version="8.3"
     local has_issue=false
+    local php_link_issue=false
+    local system_php_issue=false
+    local composer_wrapper_issue=false
+    local composer_missing=false
     
     echo
     log_info "=== 步骤1: 检查 /usr/bin/php 配置 ==="
     
+    # 检查 /usr/bin/php 是否存在且正确
     if [ -e "/usr/bin/php" ]; then
         local php_version=$(timeout 3s /usr/bin/php -r "echo PHP_VERSION;" 2>/dev/null || echo "unknown")
         local real_path=$(readlink -f "/usr/bin/php" 2>/dev/null || echo "/usr/bin/php")
@@ -519,38 +669,120 @@ diagnose_php_extension_issues() {
         log_info "  PHP版本: $php_version"
         
         if [[ "$real_path" == *"/www/server/php"* ]]; then
-            if [ "$php_version" != "unknown" ] && version_compare "$php_version" "8.3"; then
-                log_success "  [OK] /usr/bin/php 配置正确"
+            if [ "$php_version" != "unknown" ] && version_compare "$php_version" "$minimum_php_version"; then
+                log_success "  [OK] /usr/bin/php 配置正确 (宝塔PHP >= $minimum_php_version)"
             else
-                log_warning "  ! PHP版本过低: $php_version"
+                log_warning "  ! PHP版本过低: $php_version，需要 >= $minimum_php_version"
+                php_link_issue=true
                 has_issue=true
             fi
         else
             log_error "  [FAIL] /usr/bin/php 不是宝塔PHP"
+            php_link_issue=true
             has_issue=true
         fi
     else
-        log_warning "  ! /usr/bin/php 不存在"
+        log_warning "  ! /usr/bin/php 不存在，需要创建链接"
+        php_link_issue=true
+        has_issue=true
+    fi
+    
+    # 检测系统PHP包
+    echo
+    log_info "=== 步骤2: 检测系统PHP包 ==="
+    local system_php_paths=(
+        "/usr/bin/php8.4"
+        "/usr/bin/php8.3"
+        "/usr/bin/php8.2"
+        "/usr/bin/php8.1"
+        "/usr/bin/php8.0"
+        "/usr/bin/php7.4"
+    )
+    
+    local system_phps=()
+    for php_path in "${system_php_paths[@]}"; do
+        if [ -x "$php_path" ]; then
+            local version=$(timeout 3s "$php_path" -r "echo PHP_VERSION;" 2>/dev/null || echo "unknown")
+            system_phps+=("$php_path")
+            log_warning "  ! 发现系统PHP: $php_path ($version)"
+        fi
+    done
+    
+    if [ ${#system_phps[@]} -eq 0 ]; then
+        log_success "  [OK] 未发现系统PHP包"
+    else
+        log_warning "  ! 发现 ${#system_phps[@]} 个系统PHP包，建议卸载"
+        system_php_issue=true
         has_issue=true
     fi
     
     echo
-    log_info "=== 步骤2: 检查Composer配置 ==="
+    log_info "=== 步骤3: 检查Composer配置 ==="
     
     if ! command -v composer >/dev/null 2>&1; then
         log_error "  [FAIL] 未找到Composer命令"
+        log_info "  建议安装: curl -sS https://getcomposer.org/installer | php"
+        log_info "  然后移动: sudo mv composer.phar /usr/local/bin/composer"
+        composer_missing=true
         has_issue=true
     else
         local composer_path=$(which composer)
         log_info "  Composer路径: $composer_path"
         
-        local composer_version=$(timeout 5s /usr/bin/php $(which composer) --version 2>&1 | head -1)
-        if [ $? -eq 0 ] && [[ "$composer_version" == *"Composer version"* ]]; then
-            log_success "  [OK] Composer可以正常执行"
-            log_info "    $composer_version"
-        else
-            log_error "  [FAIL] Composer执行失败"
-            has_issue=true
+        # 检测composer是否是wrapper脚本
+        if [ -f "$composer_path" ]; then
+            local file_type=$(file -b "$composer_path" 2>/dev/null)
+            if [[ "$file_type" == *"shell script"* ]] || [[ "$file_type" == *"bash"* ]] || [[ "$file_type" == *"text"* ]]; then
+                # 检查内容是否包含wrapper特征
+                if grep -q "BaoTa\|wrapper\|exec.*php.*composer" "$composer_path" 2>/dev/null; then
+                    log_error "  [FAIL] 检测到Composer是宝塔wrapper脚本"
+                    composer_wrapper_issue=true
+                    
+                    # 查找原始composer
+                    if [ -f "/usr/bin/composer.original" ]; then
+                        log_info "  找到原始Composer: /usr/bin/composer.original"
+                    elif [ -f "/usr/local/bin/composer.original" ]; then
+                        log_info "  找到原始Composer: /usr/local/bin/composer.original"
+                    elif [ -f "${composer_path}.original" ]; then
+                        log_info "  找到原始Composer: ${composer_path}.original"
+                    fi
+                    has_issue=true
+                else
+                    log_info "  Composer是脚本文件，但不是wrapper"
+                fi
+            elif [[ "$file_type" == *"PHP script"* ]] || [[ "$file_type" == *"phar"* ]]; then
+                log_success "  [OK] Composer是PHP/PHAR文件（正常）"
+            fi
+        fi
+        
+        # 测试composer执行
+        if [ -e "/usr/bin/php" ]; then
+            log_info "  测试Composer执行..."
+            
+            local composer_cmd="/usr/bin/php $(which composer) --version"
+            local composer_version=""
+            local composer_error=""
+            
+            if [ "$EUID" -eq 0 ]; then
+                # root权限时，切换到www用户执行
+                log_info "    使用www用户执行composer..."
+                composer_version=$(sudo -u www bash -c "$composer_cmd" 2>&1 | head -1)
+                composer_error=$?
+            else
+                # 非root直接执行
+                composer_version=$(timeout 5s $composer_cmd 2>&1 | head -1)
+                composer_error=$?
+            fi
+            
+            if [ $composer_error -eq 0 ] && [[ "$composer_version" == *"Composer version"* ]]; then
+                log_success "  [OK] Composer可以正常执行"
+                log_info "    $composer_version"
+            else
+                log_error "  [FAIL] Composer执行失败"
+                log_info "    输出: $composer_version"
+                log_info "    返回码: $composer_error"
+                has_issue=true
+            fi
         fi
     fi
     
@@ -565,14 +797,38 @@ diagnose_php_extension_issues() {
         echo
         
         if [[ $choice =~ ^[Yy]$ ]]; then
-            fix_bt_composer_php
-            install_or_update_composer
-            log_success "修复完成"
+            # 根据具体问题运行对应的修复函数
+            
+            # 1. 卸载系统PHP（如果有）
+            if [ "$system_php_issue" = true ] && [ ${#system_phps[@]} -gt 0 ]; then
+                log_info "正在卸载系统PHP包..."
+                remove_system_php
+            fi
+            
+            # 2. 修复 /usr/bin/php（如果需要）
+            if [ "$php_link_issue" = true ]; then
+                log_info "正在修复 /usr/bin/php..."
+                fix_bt_composer_php
+            fi
+            
+            # 3. 修复Composer wrapper（如果检测到）
+            if [ "$composer_wrapper_issue" = true ]; then
+                log_info "正在修复Composer wrapper..."
+                fix_composer_wrapper
+            fi
+            
+            # 4. 安装Composer（如果缺失）
+            if [ "$composer_missing" = true ]; then
+                log_info "正在安装Composer..."
+                install_or_update_composer
+            fi
+            
+            log_success "修复完成，请重新运行诊断验证"
         else
             log_info "跳过自动修复"
         fi
     else
-        log_success "[OK] PHP和Composer配置正确"
+        log_success "[OK] PHP和Composer配置正确，无需修复"
     fi
 }
 
