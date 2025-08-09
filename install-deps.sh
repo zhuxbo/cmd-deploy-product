@@ -442,6 +442,178 @@ install_php_for_system() {
     esac
 }
 
+# 检测JDK版本
+check_jdk_version() {
+    log_info "检测 JDK 版本..."
+    
+    # 检查 java 命令是否存在
+    if ! command -v java >/dev/null 2>&1; then
+        log_warning "未检测到 Java"
+        return 1
+    fi
+    
+    # 获取Java版本信息
+    local java_version_output=$(java -version 2>&1)
+    
+    # 提取版本号（支持不同格式：1.8.0_xxx, 11.0.x, 17.0.x等）
+    local java_version=""
+    
+    # 尝试匹配新版本格式（9+）: "17.0.1" 或 "11.0.2"
+    if echo "$java_version_output" | grep -q '"[0-9]\+\.[0-9]\+\.[0-9]\+"'; then
+        java_version=$(echo "$java_version_output" | grep -oE '"[0-9]+\.[0-9]+\.[0-9]+"' | head -1 | tr -d '"' | cut -d. -f1)
+    # 尝试匹配旧版本格式（8及以下）: "1.8.0_xxx"
+    elif echo "$java_version_output" | grep -q '"1\.[0-9]\+\.[0-9]\+'; then
+        java_version=$(echo "$java_version_output" | grep -oE '"1\.[0-9]+\.[0-9]+' | head -1 | tr -d '"' | cut -d. -f2)
+    fi
+    
+    if [ -z "$java_version" ]; then
+        log_warning "无法解析 Java 版本"
+        return 1
+    fi
+    
+    log_info "当前 Java 版本: $java_version"
+    
+    # 检查版本是否满足要求（>= 17）
+    if [ "$java_version" -ge 17 ]; then
+        log_success "Java 版本满足要求 (>= 17)"
+        return 0
+    else
+        log_warning "Java 版本过低: $java_version，需要 >= 17"
+        return 1
+    fi
+}
+
+# 安装 JDK 17
+install_jdk17() {
+    log_info "开始安装 JDK 17..."
+    
+    # 检测系统类型
+    local install_success=false
+    
+    # 根据不同的包管理器安装
+    case "$PKG_MANAGER" in
+        apt)
+            log_info "使用 apt 安装 OpenJDK 17..."
+            if sudo $PKG_UPDATE >/dev/null 2>&1 && sudo $PKG_INSTALL openjdk-17-jdk >/dev/null 2>&1; then
+                install_success=true
+            else
+                # 尝试添加PPA仓库
+                log_info "尝试添加 OpenJDK PPA 仓库..."
+                sudo add-apt-repository -y ppa:openjdk-r/ppa >/dev/null 2>&1
+                sudo $PKG_UPDATE >/dev/null 2>&1
+                if sudo $PKG_INSTALL openjdk-17-jdk >/dev/null 2>&1; then
+                    install_success=true
+                fi
+            fi
+            ;;
+        yum)
+            log_info "使用 yum 安装 OpenJDK 17..."
+            # CentOS 8+ / RHEL 8+
+            if sudo $PKG_INSTALL java-17-openjdk java-17-openjdk-devel >/dev/null 2>&1; then
+                install_success=true
+            else
+                # CentOS 7 可能需要额外的仓库
+                log_info "尝试启用额外仓库..."
+                sudo $PKG_INSTALL epel-release >/dev/null 2>&1
+                if sudo $PKG_INSTALL java-17-openjdk java-17-openjdk-devel >/dev/null 2>&1; then
+                    install_success=true
+                fi
+            fi
+            ;;
+        dnf)
+            log_info "使用 dnf 安装 OpenJDK 17..."
+            if sudo $PKG_INSTALL java-17-openjdk java-17-openjdk-devel >/dev/null 2>&1; then
+                install_success=true
+            fi
+            ;;
+        zypper)
+            log_info "使用 zypper 安装 OpenJDK 17..."
+            if sudo $PKG_INSTALL java-17-openjdk java-17-openjdk-devel >/dev/null 2>&1; then
+                install_success=true
+            fi
+            ;;
+        *)
+            log_warning "未知的包管理器: $PKG_MANAGER"
+            ;;
+    esac
+    
+    # 如果系统包管理器安装失败，尝试手动下载安装
+    if [ "$install_success" = false ]; then
+        log_info "尝试手动下载安装 OpenJDK 17..."
+        
+        # 确定系统架构
+        local arch=$(uname -m)
+        local jdk_arch=""
+        
+        case "$arch" in
+            x86_64|amd64)
+                jdk_arch="x64"
+                ;;
+            aarch64|arm64)
+                jdk_arch="aarch64"
+                ;;
+            *)
+                log_error "不支持的系统架构: $arch"
+                return 1
+                ;;
+        esac
+        
+        # 下载 OpenJDK 17 (使用清华大学镜像)
+        local jdk_url="https://mirrors.tuna.tsinghua.edu.cn/Adoptium/17/jdk/x64/linux/OpenJDK17U-jdk_${jdk_arch}_linux_hotspot_17.0.9_9.tar.gz"
+        local jdk_file="/tmp/openjdk-17.tar.gz"
+        
+        log_info "从清华镜像下载 OpenJDK 17..."
+        if curl -L -o "$jdk_file" "$jdk_url" >/dev/null 2>&1 || wget -O "$jdk_file" "$jdk_url" >/dev/null 2>&1; then
+            # 解压到 /opt/java
+            sudo mkdir -p /opt/java
+            if sudo tar -xzf "$jdk_file" -C /opt/java; then
+                # 查找解压后的目录
+                local jdk_dir=$(ls -d /opt/java/jdk-17* 2>/dev/null | head -1)
+                
+                if [ -n "$jdk_dir" ] && [ -d "$jdk_dir" ]; then
+                    # 创建符号链接
+                    sudo ln -sf "$jdk_dir/bin/java" /usr/bin/java
+                    sudo ln -sf "$jdk_dir/bin/javac" /usr/bin/javac
+                    sudo ln -sf "$jdk_dir/bin/jar" /usr/bin/jar
+                    
+                    # 设置 JAVA_HOME
+                    echo "export JAVA_HOME=$jdk_dir" | sudo tee /etc/profile.d/java.sh >/dev/null
+                    echo "export PATH=\$JAVA_HOME/bin:\$PATH" | sudo tee -a /etc/profile.d/java.sh >/dev/null
+                    
+                    install_success=true
+                    log_success "OpenJDK 17 手动安装成功"
+                fi
+            fi
+            rm -f "$jdk_file"
+        fi
+    fi
+    
+    # 验证安装
+    if [ "$install_success" = true ]; then
+        # 刷新环境变量
+        if [ -f /etc/profile.d/java.sh ]; then
+            source /etc/profile.d/java.sh
+        fi
+        
+        # 再次检查版本
+        if check_jdk_version; then
+            log_success "JDK 17 安装并验证成功"
+            return 0
+        else
+            log_warning "JDK 安装后验证失败，请检查环境变量"
+            return 1
+        fi
+    else
+        log_error "JDK 17 安装失败"
+        log_info "请手动安装 JDK 17 或更高版本："
+        log_info "  Ubuntu/Debian: sudo apt-get install openjdk-17-jdk"
+        log_info "  CentOS/RHEL: sudo yum install java-17-openjdk"
+        log_info "  Fedora: sudo dnf install java-17-openjdk"
+        log_info "  或访问: https://adoptium.net/"
+        return 1
+    fi
+}
+
 # 检查Composer版本和可用性
 check_composer() {
     log_info "检查Composer..."
@@ -920,6 +1092,14 @@ main() {
     echo
     detect_system
     log_info "标准 Linux 环境"
+    
+    # 检查 JDK
+    echo
+    log_info "检查 JDK 环境..."
+    if ! check_jdk_version; then
+        log_info "需要安装 JDK 17 或更高版本"
+        install_jdk17
+    fi
     
     # 检查PHP
     if ! check_php_version || ! check_php_extensions; then
