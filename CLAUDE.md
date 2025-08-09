@@ -285,8 +285,57 @@ sudo supervisorctl tail laravel-worker
 - **build-script 仓库**: 生成部署所需的文件
 - **源码仓库**: 间接关系，通过构建脚本
 
+## 中国大陆镜像源配置
+
+### APT 源（Ubuntu/Debian）
+```bash
+# 阿里云镜像源
+deb http://mirrors.aliyun.com/ubuntu/ focal main restricted universe multiverse
+deb http://mirrors.aliyun.com/ubuntu/ focal-updates main restricted universe multiverse
+deb http://mirrors.aliyun.com/ubuntu/ focal-security main restricted universe multiverse
+
+# 清华镜像源（备选）
+deb https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ focal main restricted universe multiverse
+```
+
+### YUM/DNF 源（CentOS/RHEL/Rocky/AlmaLinux）
+```bash
+# 阿里云镜像
+baseurl=http://mirrors.aliyun.com/centos/$releasever/os/$basearch/
+
+# 清华镜像（备选）
+baseurl=https://mirrors.tuna.tsinghua.edu.cn/centos/$releasever/os/$basearch/
+```
+
+### Composer 源
+```bash
+# 设置阿里云 Composer 镜像
+composer config -g repo.packagist composer https://mirrors.aliyun.com/composer/
+
+# 备选：腾讯云镜像
+composer config -g repo.packagist composer https://mirrors.cloud.tencent.com/composer/
+```
+
+### JDK 下载源
+- 优先使用清华镜像：https://mirrors.tuna.tsinghua.edu.cn/AdoptOpenJDK/
+- 备选阿里云镜像：https://mirrors.aliyun.com/openjdk/
+
+### NPM 源（如需要）
+```bash
+npm config set registry https://registry.npmmirror.com
+```
+
 ## 最近更新
 
+- **2025-08-09**: 重要更新和优化
+  - 简化 install-deps-bt.sh，移除非宝塔相关代码（减少 65%）
+  - 添加 JDK 17+ 自动检测和安装功能（宝塔和标准环境）
+  - 改进诊断逻辑，实现针对性修复而非盲目执行
+  - 添加 Composer wrapper 检测和修复功能
+  - 添加系统 PHP 冲突检测和移除功能
+  - update.sh 添加 jq 自动安装功能
+  - JDK 模块独立化，与 Composer 分离
+  - **所有脚本配置中国大陆镜像源**，提升下载速度和稳定性
 - **2025-08-07**: 完善宝塔环境自动化处理和输出格式规范化
   - 实现PHP扩展自动安装功能，支持16个常用扩展
   - 宝塔环境自动处理Composer版本升级

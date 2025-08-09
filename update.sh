@@ -118,23 +118,55 @@ check_dependencies() {
         
         # Ubuntu/Debian 系统
         if command -v apt-get >/dev/null 2>&1; then
+            # 配置中国镜像源
+            if [ -f /etc/apt/sources.list ] && ! grep -q "mirrors.aliyun.com\|mirrors.tuna" /etc/apt/sources.list; then
+                log_info "配置 APT 中国镜像源..."
+                sudo cp /etc/apt/sources.list /etc/apt/sources.list.bak
+                sudo sed -i 's|http://[a-z][a-z].archive.ubuntu.com|http://mirrors.aliyun.com|g' /etc/apt/sources.list
+                sudo sed -i 's|http://archive.ubuntu.com|http://mirrors.aliyun.com|g' /etc/apt/sources.list
+                sudo sed -i 's|http://security.ubuntu.com|http://mirrors.aliyun.com|g' /etc/apt/sources.list
+                sudo sed -i 's|http://deb.debian.org|http://mirrors.aliyun.com|g' /etc/apt/sources.list
+            fi
             log_info "检测到 Ubuntu/Debian 系统，使用 apt 安装 jq..."
             if sudo apt-get update >/dev/null 2>&1 && sudo apt-get install -y jq >/dev/null 2>&1; then
                 install_success=true
             fi
         # CentOS/RHEL/Fedora 系统
         elif command -v yum >/dev/null 2>&1; then
+            # 配置中国镜像源
+            if [ -f /etc/yum.repos.d/CentOS-Base.repo ] && ! grep -q "mirrors.aliyun.com\|mirrors.tuna" /etc/yum.repos.d/CentOS-Base.repo; then
+                log_info "配置 YUM 中国镜像源..."
+                sudo cp /etc/yum.repos.d/CentOS-Base.repo /etc/yum.repos.d/CentOS-Base.repo.bak
+                sudo sed -i 's|mirrorlist=|#mirrorlist=|g' /etc/yum.repos.d/CentOS-Base.repo
+                sudo sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://mirrors.aliyun.com|g' /etc/yum.repos.d/CentOS-Base.repo
+            fi
             log_info "检测到 CentOS/RHEL 系统，使用 yum 安装 jq..."
             if sudo yum install -y jq >/dev/null 2>&1; then
                 install_success=true
             fi
         elif command -v dnf >/dev/null 2>&1; then
+            # 配置中国镜像源
+            if [ -f /etc/yum.repos.d/fedora.repo ] && ! grep -q "mirrors.aliyun.com\|mirrors.tuna" /etc/yum.repos.d/fedora.repo; then
+                log_info "配置 DNF 中国镜像源..."
+                sudo cp /etc/yum.repos.d/fedora.repo /etc/yum.repos.d/fedora.repo.bak
+                sudo sed -i 's|metalink=|#metalink=|g' /etc/yum.repos.d/fedora.repo
+                sudo sed -i 's|#baseurl=http://download.example/pub/fedora/linux|baseurl=https://mirrors.aliyun.com/fedora|g' /etc/yum.repos.d/fedora.repo
+            fi
             log_info "检测到 Fedora 系统，使用 dnf 安装 jq..."
             if sudo dnf install -y jq >/dev/null 2>&1; then
                 install_success=true
             fi
         # Arch Linux
         elif command -v pacman >/dev/null 2>&1; then
+            # 配置中国镜像源
+            if [ -f /etc/pacman.d/mirrorlist ] && ! grep -q "mirrors.aliyun.com\|mirrors.tuna" /etc/pacman.d/mirrorlist; then
+                log_info "配置 Pacman 中国镜像源..."
+                sudo cp /etc/pacman.d/mirrorlist /etc/pacman.d/mirrorlist.bak
+                echo 'Server = https://mirrors.aliyun.com/archlinux/$repo/os/$arch' | sudo tee /etc/pacman.d/mirrorlist.china
+                echo 'Server = https://mirrors.tuna.tsinghua.edu.cn/archlinux/$repo/os/$arch' | sudo tee -a /etc/pacman.d/mirrorlist.china
+                sudo cat /etc/pacman.d/mirrorlist >> /etc/pacman.d/mirrorlist.china
+                sudo mv /etc/pacman.d/mirrorlist.china /etc/pacman.d/mirrorlist
+            fi
             log_info "检测到 Arch Linux 系统，使用 pacman 安装 jq..."
             if sudo pacman -Sy --noconfirm jq >/dev/null 2>&1; then
                 install_success=true

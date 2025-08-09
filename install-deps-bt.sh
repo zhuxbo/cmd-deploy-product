@@ -425,9 +425,9 @@ fix_composer_wrapper() {
             sudo mv "$composer_path" "${composer_path}.bak"
         fi
         
-        # 重新下载安装
+        # 重新下载安装（优先使用国内镜像）
         local temp_file="/tmp/composer_installer_$$.php"
-        if curl -sS https://getcomposer.org/installer -o "$temp_file"; then
+        if curl -sS https://install.phpcomposer.com/installer -o "$temp_file" || curl -sS https://getcomposer.org/installer -o "$temp_file"; then
             if /usr/bin/php "$temp_file" --install-dir=/usr/local/bin --filename=composer 2>/dev/null; then
                 rm -f "$temp_file"
                 log_success "Composer重新安装成功"
@@ -589,6 +589,15 @@ install_jdk17() {
     
     # Ubuntu/Debian 系统
     if command -v apt-get >/dev/null 2>&1; then
+        # 检查并配置中国镜像源
+        if [ -f /etc/apt/sources.list ] && ! grep -q "mirrors.aliyun.com\|mirrors.tuna" /etc/apt/sources.list; then
+            log_info "配置 APT 中国镜像源..."
+            sudo cp /etc/apt/sources.list /etc/apt/sources.list.bak
+            sudo sed -i 's|http://[a-z][a-z].archive.ubuntu.com|http://mirrors.aliyun.com|g' /etc/apt/sources.list
+            sudo sed -i 's|http://archive.ubuntu.com|http://mirrors.aliyun.com|g' /etc/apt/sources.list
+            sudo sed -i 's|http://security.ubuntu.com|http://mirrors.aliyun.com|g' /etc/apt/sources.list
+            sudo sed -i 's|http://deb.debian.org|http://mirrors.aliyun.com|g' /etc/apt/sources.list
+        fi
         log_info "使用 apt 安装 OpenJDK 17..."
         if sudo apt-get update >/dev/null 2>&1 && sudo apt-get install -y openjdk-17-jdk >/dev/null 2>&1; then
             install_success=true
@@ -603,6 +612,13 @@ install_jdk17() {
         fi
     # CentOS/RHEL 系统
     elif command -v yum >/dev/null 2>&1; then
+        # 配置中国镜像源（如果尚未配置）
+        if [ -f /etc/yum.repos.d/CentOS-Base.repo ] && ! grep -q "mirrors.aliyun.com\|mirrors.tuna" /etc/yum.repos.d/CentOS-Base.repo; then
+            log_info "配置 YUM 中国镜像源..."
+            sudo cp /etc/yum.repos.d/CentOS-Base.repo /etc/yum.repos.d/CentOS-Base.repo.bak
+            sudo sed -i 's|mirrorlist=|#mirrorlist=|g' /etc/yum.repos.d/CentOS-Base.repo
+            sudo sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://mirrors.aliyun.com|g' /etc/yum.repos.d/CentOS-Base.repo
+        fi
         log_info "使用 yum 安装 OpenJDK 17..."
         # CentOS 8+ / RHEL 8+
         if sudo yum install -y java-17-openjdk java-17-openjdk-devel >/dev/null 2>&1; then
@@ -617,6 +633,13 @@ install_jdk17() {
         fi
     # Fedora 系统
     elif command -v dnf >/dev/null 2>&1; then
+        # 配置中国镜像源
+        if [ -f /etc/yum.repos.d/fedora.repo ] && ! grep -q "mirrors.aliyun.com\|mirrors.tuna" /etc/yum.repos.d/fedora.repo; then
+            log_info "配置 DNF 中国镜像源..."
+            sudo cp /etc/yum.repos.d/fedora.repo /etc/yum.repos.d/fedora.repo.bak
+            sudo sed -i 's|metalink=|#metalink=|g' /etc/yum.repos.d/fedora.repo
+            sudo sed -i 's|#baseurl=http://download.example/pub/fedora/linux|baseurl=https://mirrors.aliyun.com/fedora|g' /etc/yum.repos.d/fedora.repo
+        fi
         log_info "使用 dnf 安装 OpenJDK 17..."
         if sudo dnf install -y java-17-openjdk java-17-openjdk-devel >/dev/null 2>&1; then
             install_success=true
@@ -754,7 +777,8 @@ install_or_update_composer() {
     # 使用国内镜像下载
     local installer_urls=(
         "https://mirrors.aliyun.com/composer/composer.phar"
-        "https://mirrors.tencent.com/composer/composer.phar"
+        "https://mirrors.cloud.tencent.com/composer/composer.phar"
+        "https://install.phpcomposer.com/installer"
         "https://getcomposer.org/installer"
     )
     
@@ -799,6 +823,10 @@ install_or_update_composer() {
     # 配置中国镜像源
     log_info "配置 Composer 中国镜像源..."
     composer config -g repo.packagist composer https://mirrors.aliyun.com/composer/ 2>/dev/null || true
+    # 为www用户也配置镜像源
+    if [ "$EUID" -eq 0 ]; then
+        sudo -u www composer config -g repo.packagist composer https://mirrors.aliyun.com/composer/ 2>/dev/null || true
+    fi
     
     # 验证安装
     local final_version=$(composer --version 2>&1 | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' | head -1)
@@ -899,7 +927,7 @@ diagnose_php_extension_issues() {
     
     if ! command -v composer >/dev/null 2>&1; then
         log_error "  [FAIL] 未找到Composer命令"
-        log_info "  建议安装: curl -sS https://getcomposer.org/installer | php"
+        log_info "  建议安装: curl -sS https://install.phpcomposer.com/installer | php"
         log_info "  然后移动: sudo mv composer.phar /usr/local/bin/composer"
         composer_missing=true
         has_issue=true

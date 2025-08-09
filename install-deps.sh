@@ -113,6 +113,15 @@ detect_system() {
     
     # 确定包管理器和PHP包前缀
     if command -v apt-get &> /dev/null; then
+        # 配置中国镜像源
+        if [ -f /etc/apt/sources.list ] && ! grep -q "mirrors.aliyun.com\|mirrors.tuna" /etc/apt/sources.list; then
+            log_info "配置 APT 中国镜像源..."
+            sudo cp /etc/apt/sources.list /etc/apt/sources.list.bak
+            sudo sed -i 's|http://[a-z][a-z].archive.ubuntu.com|http://mirrors.aliyun.com|g' /etc/apt/sources.list
+            sudo sed -i 's|http://archive.ubuntu.com|http://mirrors.aliyun.com|g' /etc/apt/sources.list
+            sudo sed -i 's|http://security.ubuntu.com|http://mirrors.aliyun.com|g' /etc/apt/sources.list
+            sudo sed -i 's|http://deb.debian.org|http://mirrors.aliyun.com|g' /etc/apt/sources.list
+        fi
         PKG_MANAGER="apt"
         PKG_UPDATE="apt-get update"
         PKG_INSTALL="apt-get install -y"
@@ -120,6 +129,13 @@ detect_system() {
         PHP_PKG_PREFIX="php${PHP_VERSION}"
         SERVICE_NAME="php${PHP_VERSION}-fpm"
     elif command -v yum &> /dev/null; then
+        # 配置中国镜像源
+        if [ -f /etc/yum.repos.d/CentOS-Base.repo ] && ! grep -q "mirrors.aliyun.com\|mirrors.tuna" /etc/yum.repos.d/CentOS-Base.repo; then
+            log_info "配置 YUM 中国镜像源..."
+            sudo cp /etc/yum.repos.d/CentOS-Base.repo /etc/yum.repos.d/CentOS-Base.repo.bak
+            sudo sed -i 's|mirrorlist=|#mirrorlist=|g' /etc/yum.repos.d/CentOS-Base.repo
+            sudo sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://mirrors.aliyun.com|g' /etc/yum.repos.d/CentOS-Base.repo
+        fi
         PKG_MANAGER="yum"
         PKG_UPDATE="yum makecache"
         PKG_INSTALL="yum install -y"
@@ -127,6 +143,13 @@ detect_system() {
         PHP_PKG_PREFIX="php"
         SERVICE_NAME="php-fpm"
     elif command -v dnf &> /dev/null; then
+        # 配置中国镜像源
+        if [ -f /etc/yum.repos.d/fedora.repo ] && ! grep -q "mirrors.aliyun.com\|mirrors.tuna" /etc/yum.repos.d/fedora.repo; then
+            log_info "配置 DNF 中国镜像源..."
+            sudo cp /etc/yum.repos.d/fedora.repo /etc/yum.repos.d/fedora.repo.bak
+            sudo sed -i 's|metalink=|#metalink=|g' /etc/yum.repos.d/fedora.repo
+            sudo sed -i 's|#baseurl=http://download.example/pub/fedora/linux|baseurl=https://mirrors.aliyun.com/fedora|g' /etc/yum.repos.d/fedora.repo
+        fi
         PKG_MANAGER="dnf"
         PKG_UPDATE="dnf makecache"
         PKG_INSTALL="dnf install -y"
@@ -824,7 +847,7 @@ reinstall_composer() {
     # 尝试使用国内镜像下载最新版（优先级：速度最快的在前）
     local installer_urls=(
         "https://mirrors.aliyun.com/composer/composer.phar"
-        "https://mirrors.tencent.com/composer/composer.phar"
+        "https://mirrors.cloud.tencent.com/composer/composer.phar"
         "https://install.phpcomposer.com/installer"
         "https://mirrors.huaweicloud.com/composer/composer.phar"
         "https://getcomposer.org/installer"
@@ -894,7 +917,7 @@ reinstall_composer() {
     composer config -g process-timeout 300 2>/dev/null || true
     composer config -g use-parent-dir true 2>/dev/null || true
     # 如果阿里云不可用，可以手动切换到腾讯云镜像
-    log_info "如需切换镜像源，可使用: composer config -g repo.packagist composer https://mirrors.tencent.com/composer/"
+    log_info "如需切换镜像源，可使用: composer config -g repo.packagist composer https://mirrors.cloud.tencent.com/composer/"
     
     # 验证安装
     local final_version=$(timeout -k 3s 10s composer --version 2>&1 | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' | head -1)
