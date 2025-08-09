@@ -111,12 +111,61 @@ fi
 check_dependencies() {
     # 检查 jq 命令
     if ! command -v jq >/dev/null 2>&1; then
-        log_error "jq 命令未安装，这是解析配置文件所必需的"
-        log_info "请先安装 jq："
-        log_info "  Ubuntu/Debian: sudo apt-get install jq"
-        log_info "  CentOS/RHEL: sudo yum install jq"
-        log_info "  其他系统: 请参考 https://stedolan.github.io/jq/download/"
-        exit 1
+        log_warning "jq 命令未安装，正在自动安装..."
+        
+        # 尝试自动安装 jq
+        local install_success=false
+        
+        # Ubuntu/Debian 系统
+        if command -v apt-get >/dev/null 2>&1; then
+            log_info "检测到 Ubuntu/Debian 系统，使用 apt 安装 jq..."
+            if sudo apt-get update >/dev/null 2>&1 && sudo apt-get install -y jq >/dev/null 2>&1; then
+                install_success=true
+            fi
+        # CentOS/RHEL/Fedora 系统
+        elif command -v yum >/dev/null 2>&1; then
+            log_info "检测到 CentOS/RHEL 系统，使用 yum 安装 jq..."
+            if sudo yum install -y jq >/dev/null 2>&1; then
+                install_success=true
+            fi
+        elif command -v dnf >/dev/null 2>&1; then
+            log_info "检测到 Fedora 系统，使用 dnf 安装 jq..."
+            if sudo dnf install -y jq >/dev/null 2>&1; then
+                install_success=true
+            fi
+        # Arch Linux
+        elif command -v pacman >/dev/null 2>&1; then
+            log_info "检测到 Arch Linux 系统，使用 pacman 安装 jq..."
+            if sudo pacman -Sy --noconfirm jq >/dev/null 2>&1; then
+                install_success=true
+            fi
+        # openSUSE
+        elif command -v zypper >/dev/null 2>&1; then
+            log_info "检测到 openSUSE 系统，使用 zypper 安装 jq..."
+            if sudo zypper install -y jq >/dev/null 2>&1; then
+                install_success=true
+            fi
+        else
+            log_warning "未能识别系统包管理器"
+        fi
+        
+        # 验证安装结果
+        if command -v jq >/dev/null 2>&1; then
+            install_success=true
+            log_success "jq 已成功安装"
+        fi
+        
+        # 如果自动安装失败，提供手动安装指引
+        if [ "$install_success" = false ]; then
+            log_error "自动安装 jq 失败，请手动安装："
+            log_info "  Ubuntu/Debian: sudo apt-get install jq"
+            log_info "  CentOS/RHEL: sudo yum install jq"
+            log_info "  Fedora: sudo dnf install jq"
+            log_info "  Arch: sudo pacman -Sy jq"
+            log_info "  openSUSE: sudo zypper install jq"
+            log_info "  其他系统: 请参考 https://stedolan.github.io/jq/download/"
+            exit 1
+        fi
     fi
 }
 
