@@ -45,15 +45,66 @@ cleanup() {
 # 设置退出陷阱
 trap cleanup EXIT INT TERM
 
-# 更新模块
-UPDATE_MODULE="${1:-all}"
-VALID_MODULES=("api" "admin" "user" "easy" "nginx" "all")
+# 显示使用帮助
+show_usage() {
+    echo "证书管理系统更新工具"
+    echo ""
+    echo "用法:"
+    echo "  $0 [操作] [选项]"
+    echo ""
+    echo "操作:"
+    echo "  update [模块]    更新系统（默认）"
+    echo "  list             列出所有备份"
+    echo "  restore <备份>   恢复指定备份"
+    echo "  help             显示此帮助"
+    echo ""
+    echo "更新模块:"
+    echo "  all              更新所有模块（默认）"
+    echo "  api              仅更新后端"
+    echo "  admin            仅更新管理端"
+    echo "  user             仅更新用户端"
+    echo "  easy             仅更新简易端"
+    echo "  nginx            仅更新Nginx配置"
+    echo ""
+    echo "示例:"
+    echo "  $0                               # 更新所有模块"
+    echo "  $0 update api                    # 仅更新后端"
+    echo "  $0 list                          # 列出备份"
+    echo "  $0 restore update_20250809_1234  # 恢复备份"
+    echo ""
+    echo "兼容旧版调用:"
+    echo "  $0 api                           # 等同于 $0 update api"
+}
 
-if [[ ! " ${VALID_MODULES[@]} " =~ " ${UPDATE_MODULE} " ]]; then
-    log_error "无效的更新模块: $UPDATE_MODULE"
-    log_info "有效的模块: ${VALID_MODULES[*]}"
-    log_info "用法: $0 [all|api|admin|user|easy|nginx]"
+# 操作模式和模块
+ACTION="${1:-update}"
+UPDATE_MODULE="${2:-all}"
+
+# 如果第一个参数是模块名，则兼容旧版本调用方式
+VALID_MODULES=("api" "admin" "user" "easy" "nginx" "all")
+if [[ " ${VALID_MODULES[@]} " =~ " ${ACTION} " ]]; then
+    # 旧版本调用方式：./update.sh [module]
+    UPDATE_MODULE="$ACTION"
+    ACTION="update"
+fi
+
+# 验证操作模式
+VALID_ACTIONS=("update" "list" "restore" "help")
+if [[ ! " ${VALID_ACTIONS[@]} " =~ " ${ACTION} " ]]; then
+    log_error "无效的操作: $ACTION"
+    log_info "有效的操作: ${VALID_ACTIONS[*]}"
+    show_usage
     exit 1
+fi
+
+# 验证更新模块（仅在更新模式下）
+if [ "$ACTION" = "update" ]; then
+    if [[ ! " ${VALID_MODULES[@]} " =~ " ${UPDATE_MODULE} " ]]; then
+        log_error "无效的更新模块: $UPDATE_MODULE"
+        log_info "有效的模块: ${VALID_MODULES[*]}"
+        show_usage
+        exit 1
+    fi
 fi
 
 # 检查必要的命令
@@ -701,6 +752,188 @@ check_services_status() {
     fi
 }
 
+# 列出备份
+list_backups() {
+    log_info "备份列表:"
+    echo
+    
+    if [ ! -d "$BACKUP_DIR" ]; then
+        log_warning "备份目录不存在"
+        return
+    fi
+    
+    # 查找备份目录
+    BACKUP_DIRS=$(find "$BACKUP_DIR" -maxdepth 1 -name "update_*" -type d | sort -r)
+    
+    if [ -z "$BACKUP_DIRS" ]; then
+        log_warning "没有找到备份"
+        return
+    fi
+    
+    echo "备份名称                    版本        模块      备份时间"
+    echo "--------------------------------------------------------------------"
+    
+    while IFS= read -r dir; do
+        if [ -d "$dir" ]; then
+            BACKUP_NAME=$(basename "$dir")
+            
+            # 读取备份信息
+            if [ -f "$dir/backup_info.txt" ]; then
+                # 提取信息
+                OLD_VERSION=$(grep "原版本:" "$dir/backup_info.txt" 2>/dev/null | cut -d':' -f2 | xargs || echo "unknown")
+                MODULE=$(grep "更新模块:" "$dir/backup_info.txt" 2>/dev/null | cut -d':' -f2 | xargs || echo "unknown")
+                BACKUP_TIME=$(grep "备份时间:" "$dir/backup_info.txt" 2>/dev/null | cut -d':' -f2- | xargs || echo "unknown")
+                
+                printf "%-28s %-11s %-9s %s\n" "$BACKUP_NAME" "$OLD_VERSION" "$MODULE" "$BACKUP_TIME"
+            else
+                # 从目录名提取时间戳
+                TIMESTAMP=$(echo "$BACKUP_NAME" | sed 's/update_//')
+                DATE_PART=$(echo "$TIMESTAMP" | cut -d'_' -f1)
+                TIME_PART=$(echo "$TIMESTAMP" | cut -d'_' -f2)
+                
+                if [ ${#DATE_PART} -eq 8 ] && [ ${#TIME_PART} -eq 6 ]; then
+                    FORMATTED_DATE="${DATE_PART:0:4}-${DATE_PART:4:2}-${DATE_PART:6:2}"
+                    FORMATTED_TIME="${TIME_PART:0:2}:${TIME_PART:2:2}:${TIME_PART:4:2}"
+                    printf "%-28s %-11s %-9s %s %s\n" "$BACKUP_NAME" "unknown" "unknown" "$FORMATTED_DATE" "$FORMATTED_TIME"
+                else
+                    printf "%-28s %-11s %-9s %s\n" "$BACKUP_NAME" "unknown" "unknown" "unknown"
+                fi
+            fi
+        fi
+    done <<< "$BACKUP_DIRS"
+    echo
+}
+
+# 恢复备份
+restore_backup() {
+    local backup_name="$1"
+    
+    if [ -z "$backup_name" ]; then
+        log_error "请指定要恢复的备份"
+        log_info "用法: $0 restore <备份名称>"
+        log_info "使用 '$0 list' 查看可用的备份"
+        exit 1
+    fi
+    
+    # 构建备份路径
+    local backup_path="$BACKUP_DIR/$backup_name"
+    
+    if [ ! -d "$backup_path" ]; then
+        log_error "备份不存在: $backup_name"
+        log_info "使用 '$0 list' 查看可用的备份"
+        exit 1
+    fi
+    
+    log_warning "============================================"
+    log_warning "警告：恢复备份将覆盖当前的系统文件！"
+    log_warning "备份: $backup_name"
+    
+    # 显示备份信息
+    if [ -f "$backup_path/backup_info.txt" ]; then
+        echo
+        log_info "备份信息:"
+        cat "$backup_path/backup_info.txt"
+        echo
+    fi
+    
+    log_warning "============================================"
+    
+    read -p "确定要恢复此备份吗？(y/N): " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        log_info "恢复已取消"
+        exit 0
+    fi
+    
+    log_info "开始恢复备份..."
+    
+    # 创建当前状态的紧急备份
+    EMERGENCY_BACKUP="$BACKUP_DIR/emergency_$(date +%Y%m%d_%H%M%S)"
+    log_info "创建紧急备份: $(basename "$EMERGENCY_BACKUP")"
+    mkdir -p "$EMERGENCY_BACKUP"
+    
+    # 备份当前文件
+    for dir in backend frontend nginx; do
+        if [ -d "$backup_path/$dir" ] && [ -d "$SITE_ROOT/$dir" ]; then
+            cp -a "$SITE_ROOT/$dir" "$EMERGENCY_BACKUP/" 2>/dev/null
+        fi
+    done
+    
+    # 记录紧急备份信息
+    cat > "$EMERGENCY_BACKUP/backup_info.txt" <<EOF
+备份时间: $(date)
+备份类型: 紧急备份（恢复前自动创建）
+恢复来源: $backup_name
+EOF
+    
+    # 恢复备份文件
+    log_info "恢复系统文件..."
+    local restore_success=true
+    
+    # 恢复各个目录
+    for dir in backend frontend nginx; do
+        if [ -d "$backup_path/$dir" ]; then
+            log_info "恢复 $dir..."
+            if [ -d "$SITE_ROOT/$dir" ]; then
+                rm -rf "$SITE_ROOT/$dir"
+            fi
+            if cp -a "$backup_path/$dir" "$SITE_ROOT/"; then
+                log_success "$dir 恢复成功"
+            else
+                log_error "$dir 恢复失败"
+                restore_success=false
+            fi
+        fi
+    done
+    
+    if [ "$restore_success" = false ]; then
+        log_error "恢复过程中出现错误"
+        log_info "可以从紧急备份恢复: $0 restore $(basename "$EMERGENCY_BACKUP")"
+        exit 1
+    fi
+    
+    # 恢复后设置权限
+    log_info "设置文件权限..."
+    set_permissions
+    
+    # 如果恢复了后端，执行必要的Laravel命令
+    if [ -d "$backup_path/backend" ]; then
+        log_info "执行Laravel恢复命令..."
+        cd "$SITE_ROOT/backend"
+        
+        # 检查PHP命令
+        PHP_CMD="php"
+        if check_bt_panel; then
+            for ver in 85 84 83; do
+                if [ -x "/www/server/php/$ver/bin/php" ]; then
+                    PHP_CMD="/www/server/php/$ver/bin/php"
+                    break
+                fi
+            done
+        fi
+        
+        # 清理缓存
+        $PHP_CMD artisan cache:clear 2>/dev/null || true
+        $PHP_CMD artisan config:clear 2>/dev/null || true
+        $PHP_CMD artisan route:clear 2>/dev/null || true
+        
+        cd "$SCRIPT_DIR"
+    fi
+    
+    # 重载服务
+    log_info "重载服务..."
+    reload_services
+    
+    log_success "============================================"
+    log_success "恢复完成！"
+    log_success "恢复备份: $backup_name"
+    log_success "紧急备份: $(basename "$EMERGENCY_BACKUP")"
+    log_success "============================================"
+    echo
+    log_info "如果系统出现问题，可以恢复紧急备份:"
+    log_info "$0 restore $(basename "$EMERGENCY_BACKUP")"
+}
+
 # 主函数
 main() {
     log_info "============================================"
@@ -762,5 +995,27 @@ main() {
     fi
 }
 
-# 执行主函数
-main "$@"
+# 根据操作模式执行
+case "$ACTION" in
+    update)
+        # 执行更新流程
+        main
+        ;;
+    list)
+        # 列出备份
+        list_backups
+        ;;
+    restore)
+        # 恢复备份
+        restore_backup "$UPDATE_MODULE"
+        ;;
+    help)
+        # 显示帮助
+        show_usage
+        ;;
+    *)
+        log_error "未知操作: $ACTION"
+        show_usage
+        exit 1
+        ;;
+esac

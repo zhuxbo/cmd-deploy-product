@@ -91,29 +91,42 @@ sudo ./install-deps-bt.sh -d
 
 ### 4. update.sh - 系统更新脚本
 
-用于更新已部署的系统到最新版本。
+用于更新已部署的系统到最新版本，支持备份恢复功能。
 
 **功能特点：**
-- 支持模块化更新（api/admin/user/easy/all）
+- 支持模块化更新（api/admin/user/easy/nginx/all）
 - 自动备份当前版本
 - 智能保留用户配置和数据
 - 服务管理（停止/启动 Nginx 和队列）
 - 版本检查和强制更新选项
+- **备份恢复功能**：可恢复到之前的任何版本
 
 **使用方法：**
 ```bash
-# 更新所有模块
-./update.sh
+# 更新操作
+./update.sh                      # 更新所有模块
+./update.sh update api            # 仅更新后端
+./update.sh update admin          # 仅更新管理端
+./update.sh update user           # 仅更新用户端
+./update.sh update easy           # 仅更新简易端
+./update.sh update nginx          # 仅更新Nginx配置
 
-# 更新特定模块
-./update.sh api      # 仅更新后端
-./update.sh admin    # 仅更新管理端
-./update.sh user     # 仅更新用户端
-./update.sh easy     # 仅更新简易端
+# 备份管理
+./update.sh list                  # 列出所有备份
+./update.sh restore update_20250809_143022  # 恢复指定备份
+
+# 兼容旧版调用方式
+./update.sh api                   # 等同于 ./update.sh update api
 
 # 强制更新（跳过版本检查）
 FORCE_UPDATE=1 ./update.sh
 ```
+
+**恢复功能说明：**
+- 每次更新前自动创建备份
+- 恢复时会创建紧急备份，确保可以回滚
+- 恢复包括系统文件、配置和权限设置
+- 恢复后自动重载服务
 
 **配置文件：**
 更新脚本使用 `update-config.json` 配置文件，首次运行时自动创建。
@@ -252,8 +265,16 @@ jq -r '.version' ../info.json
 
 ## 故障排查
 
+### 系统恢复
+- **更新失败恢复**：使用 `./update.sh restore <备份名>` 恢复到之前版本
+- **数据库恢复**：使用 `./keeper.sh restore <备份文件>` 恢复数据库和配置
+- **查看可用备份**：
+  - 系统备份：`./update.sh list`
+  - 数据备份：`./keeper.sh list`
+
+### 常见问题
 - **安装失败**：检查 backup/install/ 目录中的备份进行恢复
-- **更新失败**：检查 backup/update/ 目录中的备份进行恢复
+- **更新失败**：使用 `./update.sh list` 查看备份，然后恢复
 - **权限错误**：确保 Web 用户（站点目录所有者）对 storage 和 bootstrap/cache 有写权限
 - **数据库连接**：检查 backend/.env 文件中的数据库配置
 - **备份失败**：检查磁盘空间和数据库访问权限
