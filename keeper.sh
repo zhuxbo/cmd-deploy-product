@@ -108,7 +108,7 @@ check_database() {
     
     log_info "数据库总大小: ${TOTAL_SIZE}MB"
     
-    # 获取表统计
+    # 获取表统计（显示所有表）
     echo
     log_info "各表大小统计:"
     mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USERNAME" "$DB_DATABASE" \
@@ -118,8 +118,7 @@ check_database() {
             table_rows AS 'Rows'
             FROM information_schema.tables 
             WHERE table_schema = '$DB_DATABASE' 
-            ORDER BY (data_length + index_length) DESC
-            LIMIT 10;" 2>/dev/null || log_error "无法获取表统计信息"
+            ORDER BY (data_length + index_length) DESC;" 2>/dev/null || log_error "无法获取表统计信息"
     
     # 统计日志表
     echo

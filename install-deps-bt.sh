@@ -660,14 +660,47 @@ check_composer() {
         
         # 如果不需要重新安装，验证版本
         if [ "$need_reinstall" = false ]; then
-            local composer_version=$(timeout 5s composer --version 2>/dev/null | head -1)
+            # 使用PHP_CMD明确执行composer，避免wrapper问题
+            local composer_version=""
+            if [ -f "$composer_path" ]; then
+                # 处理权限问题：如果是root用户，使用sudo -u www执行
+                if [ "$EUID" -eq 0 ]; then
+                    # 使用www用户执行，避免权限问题
+                    composer_version=$(timeout 5s sudo -u www $PHP_CMD "$composer_path" --version 2>/dev/null | head -1)
+                else
+                    # 非root直接执行
+                    composer_version=$(timeout 5s $PHP_CMD "$composer_path" --version 2>/dev/null | head -1)
+                fi
+            fi
+            
             if [ -n "$composer_version" ]; then
                 log_success "Composer已安装: $composer_version"
                 
-                # 配置中国镜像源
+                # 配置中国镜像源（处理权限问题）
                 log_info "配置Composer中国镜像源..."
-                composer config -g repo.packagist composer https://mirrors.aliyun.com/composer/ 2>/dev/null || true
-                composer config -g use-parent-dir true 2>/dev/null || true
+                
+                # 检查并修复composer配置目录权限
+                local composer_home="${COMPOSER_HOME:-$HOME/.config/composer}"
+                if [ ! -d "$composer_home" ]; then
+                    composer_home="$HOME/.composer"
+                fi
+                
+                # 如果配置目录存在且是root权限，修复权限
+                if [ -d "$composer_home" ] && [ "$(stat -c %U "$composer_home")" = "root" ]; then
+                    log_info "修复Composer配置目录权限..."
+                    sudo chown -R "$USER:$USER" "$composer_home" 2>/dev/null || true
+                fi
+                
+                # 使用sudo -u避免权限问题
+                if [ "$EUID" -eq 0 ]; then
+                    # root用户执行，切换到www用户
+                    sudo -u www $PHP_CMD "$composer_path" config -g repo.packagist composer https://mirrors.aliyun.com/composer/ 2>/dev/null || true
+                    sudo -u www $PHP_CMD "$composer_path" config -g use-parent-dir true 2>/dev/null || true
+                else
+                    # 普通用户直接执行
+                    $PHP_CMD "$composer_path" config -g repo.packagist composer https://mirrors.aliyun.com/composer/ 2>/dev/null || true
+                    $PHP_CMD "$composer_path" config -g use-parent-dir true 2>/dev/null || true
+                fi
                 log_success "已配置阿里云Composer镜像"
                 
                 return 0
@@ -684,11 +717,34 @@ check_composer() {
     # 如果需要重新安装
     if [ "$need_reinstall" = true ]; then
         if install_composer; then
-            # 配置中国镜像源
+            # 配置中国镜像源（处理权限问题）
             log_info "配置Composer中国镜像源..."
-            composer config -g repo.packagist composer https://mirrors.aliyun.com/composer/ 2>/dev/null || true
-            composer config -g use-parent-dir true 2>/dev/null || true
-            log_success "已配置阿里云Composer镜像"
+            local new_composer_path="/usr/local/bin/composer"
+            if [ -f "$new_composer_path" ]; then
+                # 检查并修复composer配置目录权限
+                local composer_home="${COMPOSER_HOME:-$HOME/.config/composer}"
+                if [ ! -d "$composer_home" ]; then
+                    composer_home="$HOME/.composer"
+                fi
+                
+                # 如果配置目录存在且是root权限，修复权限
+                if [ -d "$composer_home" ] && [ "$(stat -c %U "$composer_home")" = "root" ]; then
+                    log_info "修复Composer配置目录权限..."
+                    sudo chown -R "$USER:$USER" "$composer_home" 2>/dev/null || true
+                fi
+                
+                # 使用sudo -u避免权限问题
+                if [ "$EUID" -eq 0 ]; then
+                    # root用户执行，切换到www用户
+                    sudo -u www $PHP_CMD "$new_composer_path" config -g repo.packagist composer https://mirrors.aliyun.com/composer/ 2>/dev/null || true
+                    sudo -u www $PHP_CMD "$new_composer_path" config -g use-parent-dir true 2>/dev/null || true
+                else
+                    # 普通用户直接执行
+                    $PHP_CMD "$new_composer_path" config -g repo.packagist composer https://mirrors.aliyun.com/composer/ 2>/dev/null || true
+                    $PHP_CMD "$new_composer_path" config -g use-parent-dir true 2>/dev/null || true
+                fi
+                log_success "已配置阿里云Composer镜像"
+            fi
             return 0
         else
             return 1
