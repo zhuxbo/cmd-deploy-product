@@ -59,6 +59,7 @@ show_usage() {
     echo "  restore <文件>  恢复指定的备份文件"
     echo "  list            列出所有备份文件"
     echo "  clean           清理过期的备份文件"
+    echo "  check           检查数据库大小和优化建议"
     echo "  help            显示此帮助信息"
     echo ""
     echo "环境变量:"
@@ -68,7 +69,104 @@ show_usage() {
     echo "  $0                                    # 备份"
     echo "  $0 restore backup_20231201_120000.tar.gz   # 恢复备份"
     echo "  $0 list                              # 列出备份"
+    echo "  $0 check                             # 检查数据库"
     echo "  KEEP_BACKUPS=14 $0 clean            # 保留14个备份"
+    echo ""
+    echo "大数据库优化:"
+    echo "  - 自动排除 _logs 后缀表"
+    echo "  - 使用 --quick 避免内存缓存"
+    echo "  - 支持压缩传输和存储"
+    echo "  - 显示进度提示（安装 pv 命令可视化进度）"
+}
+
+# 检查数据库大小和提供优化建议
+check_database() {
+    log_info "检查数据库状态和大小..."
+    
+    # 验证环境
+    if [ ! -f "$ENV_FILE" ]; then
+        log_error ".env 文件不存在"
+        exit 1
+    fi
+    
+    # 读取数据库配置
+    read_db_config
+    
+    echo
+    log_info "=== 数据库统计信息 ==="
+    
+    # 获取数据库总大小
+    TOTAL_SIZE=$(mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USERNAME" "$DB_DATABASE" \
+        -e "SELECT ROUND(SUM(data_length + index_length) / 1024 / 1024, 2) AS 'Size_MB' \
+            FROM information_schema.tables WHERE table_schema='$DB_DATABASE';" \
+        -s 2>/dev/null | tail -1 || echo "0")
+    
+    log_info "数据库总大小: ${TOTAL_SIZE}MB"
+    
+    # 获取表统计
+    echo
+    log_info "各表大小统计:"
+    mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USERNAME" "$DB_DATABASE" \
+        -e "SELECT 
+            table_name AS 'Table',
+            ROUND(((data_length + index_length) / 1024 / 1024), 2) AS 'Size_MB',
+            table_rows AS 'Rows'
+            FROM information_schema.tables 
+            WHERE table_schema = '$DB_DATABASE' 
+            ORDER BY (data_length + index_length) DESC
+            LIMIT 10;" 2>/dev/null || log_error "无法获取表统计信息"
+    
+    # 统计日志表
+    echo
+    log_info "日志表统计（将被排除）:"
+    LOG_TABLES=$(mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USERNAME" "$DB_DATABASE" \
+        -e "SELECT table_name FROM information_schema.tables 
+            WHERE table_schema = '$DB_DATABASE' AND table_name LIKE '%_logs';" \
+        -s 2>/dev/null | grep -v "^table_name$" || echo "")
+    
+    if [ -n "$LOG_TABLES" ]; then
+        while IFS= read -r table; do
+            if [ -n "$table" ]; then
+                SIZE=$(mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USERNAME" "$DB_DATABASE" \
+                    -e "SELECT ROUND(((data_length + index_length) / 1024 / 1024), 2) \
+                        FROM information_schema.tables 
+                        WHERE table_schema = '$DB_DATABASE' AND table_name = '$table';" \
+                    -s 2>/dev/null | tail -1 || echo "0")
+                log_info "  - $table: ${SIZE}MB"
+            fi
+        done <<< "$LOG_TABLES"
+    else
+        log_info "  无日志表"
+    fi
+    
+    # 提供优化建议
+    echo
+    log_info "=== 优化建议 ==="
+    
+    if [ "${TOTAL_SIZE%.*}" -gt 1000 ] 2>/dev/null; then
+        log_warning "数据库较大（超过1GB），建议："
+        log_info "1. 定期清理日志表数据"
+        log_info "2. 考虑增加备份磁盘空间"
+        log_info "3. 使用定时任务在低峰期备份"
+        log_info "4. 安装 pv 命令以显示备份/恢复进度："
+        log_info "   Ubuntu/Debian: sudo apt install pv"
+        log_info "   CentOS/RHEL: sudo yum install pv"
+    elif [ "${TOTAL_SIZE%.*}" -gt 100 ] 2>/dev/null; then
+        log_info "数据库大小适中，当前配置可以良好处理"
+    else
+        log_info "数据库较小，备份恢复会很快完成"
+    fi
+    
+    # 检查磁盘空间
+    echo
+    check_disk_space
+    
+    # 估算备份大小（压缩后约为原始大小的20-30%）
+    ESTIMATED_BACKUP=$(echo "$TOTAL_SIZE * 0.25" | bc 2>/dev/null || echo "$((${TOTAL_SIZE%.*} / 4))")
+    log_info "预计备份文件大小: 约${ESTIMATED_BACKUP}MB（压缩后）"
+    
+    # 清除密码环境变量
+    unset MYSQL_PWD
 }
 
 # 验证环境
@@ -91,6 +189,12 @@ validate_environment() {
     
     # 检查磁盘空间（至少需要1GB可用空间）
     check_disk_space
+    
+    # 检查MySQL客户端工具版本（用于大数据处理）
+    if command -v mysql >/dev/null 2>&1; then
+        MYSQL_VERSION=$(mysql --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+' | head -1)
+        log_info "MySQL客户端版本: $MYSQL_VERSION"
+    fi
 }
 
 # 检查磁盘空间
@@ -235,6 +339,22 @@ backup_database() {
     
     # 执行备份，添加重试机制
     log_info "开始导出数据库 $DB_DATABASE..."
+    
+    # 获取数据库大小估算
+    DB_SIZE=$(mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USERNAME" \
+        -e "SELECT ROUND(SUM(data_length + index_length) / 1024 / 1024, 1) AS 'DB Size in MB' \
+            FROM information_schema.tables WHERE table_schema='$DB_DATABASE';" \
+        -s 2>/dev/null | tail -1 || echo "unknown")
+    
+    if [ "$DB_SIZE" != "unknown" ]; then
+        log_info "数据库大小: ${DB_SIZE}MB"
+        
+        # 如果数据库超过100MB，给出提示
+        if [ "${DB_SIZE%.*}" -gt 100 ] 2>/dev/null; then
+            log_warning "数据库较大，备份可能需要较长时间..."
+        fi
+    fi
+    
     RETRY_COUNT=0
     MAX_RETRIES=3
     
@@ -244,8 +364,37 @@ backup_database() {
             sleep 5
         fi
         
-        # 执行备份命令
-        if $DUMP_CMD $DUMP_OPTIONS $IGNORE_TABLES "$DB_DATABASE" > "$DB_BACKUP_FILE" 2>/tmp/mysqldump_error.log; then
+        # 执行备份命令（带进度提示）
+        if [ "${DB_SIZE%.*}" -gt 100 ] 2>/dev/null || [ "$DB_SIZE" = "unknown" ]; then
+            # 大数据库或未知大小，显示进度提示
+            log_info "正在导出数据..."
+            (
+                while true; do
+                    echo -n "."
+                    sleep 3
+                done
+            ) &
+            PROGRESS_PID=$!
+            
+            if $DUMP_CMD $DUMP_OPTIONS $IGNORE_TABLES "$DB_DATABASE" > "$DB_BACKUP_FILE" 2>/tmp/mysqldump_error.log; then
+                kill $PROGRESS_PID 2>/dev/null
+                echo  # 换行
+                BACKUP_SUCCESS=1
+            else
+                kill $PROGRESS_PID 2>/dev/null
+                echo  # 换行
+                BACKUP_SUCCESS=0
+            fi
+        else
+            # 小数据库，直接导出
+            if $DUMP_CMD $DUMP_OPTIONS $IGNORE_TABLES "$DB_DATABASE" > "$DB_BACKUP_FILE" 2>/tmp/mysqldump_error.log; then
+                BACKUP_SUCCESS=1
+            else
+                BACKUP_SUCCESS=0
+            fi
+        fi
+        
+        if [ $BACKUP_SUCCESS -eq 1 ]; then
             # 备份成功，验证文件
             if [ -f "$DB_BACKUP_FILE" ] && [ -s "$DB_BACKUP_FILE" ]; then
                 # 验证SQL文件完整性（检查是否有完整的结束标记）
@@ -519,12 +668,72 @@ restore_backup() {
         export MYSQL_PWD="$DB_PASSWORD"
     fi
     
-    # 恢复数据库
-    if zcat "$TEMP_DIR/database.sql.gz" | mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USERNAME" "$DB_DATABASE"; then
-        log_success "数据库恢复完成"
+    # 恢复数据库（优化大数据处理）
+    log_info "开始恢复数据库（可能需要较长时间）..."
+    
+    # 构建mysql命令，添加优化参数
+    MYSQL_CMD="mysql -h $DB_HOST -P $DB_PORT -u $DB_USERNAME"
+    # 优化参数：
+    # --max_allowed_packet=1024M: 支持大数据包
+    # --connect-timeout=60: 连接超时60秒
+    # --compress: 使用压缩协议
+    MYSQL_OPTIONS="--max_allowed_packet=1024M --connect-timeout=60 --compress"
+    
+    # 显示文件大小
+    FILE_SIZE=$(du -h "$TEMP_DIR/database.sql.gz" | cut -f1)
+    log_info "备份文件大小: $FILE_SIZE"
+    
+    # 恢复数据库，添加进度提示
+    if command -v pv >/dev/null 2>&1; then
+        # 如果有pv命令，显示进度
+        log_info "正在恢复数据库（显示进度）..."
+        if pv "$TEMP_DIR/database.sql.gz" | zcat | $MYSQL_CMD $MYSQL_OPTIONS "$DB_DATABASE" 2>/tmp/mysql_restore_error.log; then
+            log_success "数据库恢复完成"
+        else
+            RESTORE_ERROR=1
+        fi
     else
+        # 没有pv命令，使用普通方式但添加提示
+        log_info "正在恢复数据库..."
+        log_info "提示：安装 pv 命令可以显示恢复进度 (apt install pv)"
+        
+        # 使用后台进程显示点号表示进度
+        (
+            while true; do
+                echo -n "."
+                sleep 2
+            done
+        ) &
+        PROGRESS_PID=$!
+        
+        if zcat "$TEMP_DIR/database.sql.gz" | $MYSQL_CMD $MYSQL_OPTIONS "$DB_DATABASE" 2>/tmp/mysql_restore_error.log; then
+            kill $PROGRESS_PID 2>/dev/null
+            echo  # 换行
+            log_success "数据库恢复完成"
+        else
+            kill $PROGRESS_PID 2>/dev/null
+            echo  # 换行
+            RESTORE_ERROR=1
+        fi
+    fi
+    
+    # 处理恢复错误
+    if [ "${RESTORE_ERROR:-0}" -eq 1 ]; then
         log_error "数据库恢复失败"
-        log_error "请检查数据库连接配置和权限"
+        
+        # 显示错误信息
+        if [ -f /tmp/mysql_restore_error.log ]; then
+            ERROR_MSG=$(head -5 /tmp/mysql_restore_error.log)
+            [ -n "$ERROR_MSG" ] && log_error "错误信息: $ERROR_MSG"
+            rm -f /tmp/mysql_restore_error.log
+        fi
+        
+        log_error "可能的原因："
+        log_error "1. 数据库连接配置错误"
+        log_error "2. 用户权限不足"
+        log_error "3. 磁盘空间不足"
+        log_error "4. 数据库文件过大导致超时"
+        
         # 恢复原来的 .env 文件
         if [ -f "$RESTORE_BACKUP_DIR/env.backup" ]; then
             cp "$RESTORE_BACKUP_DIR/env.backup" "$ENV_FILE"
@@ -582,6 +791,9 @@ main() {
             ;;
         clean)
             clean_backups
+            ;;
+        check)
+            check_database
             ;;
         help|--help|-h)
             show_usage
