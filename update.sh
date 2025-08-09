@@ -463,6 +463,13 @@ optimize_backend() {
         # 优化 Composer 自动加载（使用正确的站点所有者执行）
         if command -v composer &> /dev/null; then
             log_info "优化 Composer 自动加载..."
+            
+            # 配置中国镜像源加速（如果在中国境内）
+            if ping -c 1 -W 1 mirrors.aliyun.com >/dev/null 2>&1; then
+                log_info "配置 Composer 中国镜像源..."
+                composer config -g repo.packagist composer https://mirrors.aliyun.com/composer/ 2>/dev/null || true
+            fi
+            
             # 获取正确的站点所有者
             if check_bt_panel; then
                 COMPOSER_USER="www"

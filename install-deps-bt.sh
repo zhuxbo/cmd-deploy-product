@@ -554,7 +554,58 @@ enable_php_functions() {
     fi
 }
 
-# 检查Composer
+# 安装或重新安装Composer
+install_composer() {
+    log_info "安装Composer..."
+    
+    # 使用国内镜像源（阿里云）
+    local COMPOSER_INSTALL_URL="https://mirrors.aliyun.com/composer/composer.phar"
+    local COMPOSER_INSTALL_BACKUP="https://install.phpcomposer.com/installer"
+    
+    # 先尝试直接下载 composer.phar
+    log_info "从阿里云镜像下载 Composer..."
+    if curl --connect-timeout 10 --max-time 60 -sL "$COMPOSER_INSTALL_URL" -o composer.phar; then
+        if [ -f composer.phar ] && [ -s composer.phar ]; then
+            # 验证下载的文件
+            if $PHP_CMD composer.phar --version >/dev/null 2>&1; then
+                sudo mv composer.phar /usr/local/bin/composer
+                sudo chmod +x /usr/local/bin/composer
+                log_success "Composer 安装成功（阿里云镜像）"
+                return 0
+            else
+                log_warning "下载的 composer.phar 无效"
+                rm -f composer.phar
+            fi
+        fi
+    fi
+    
+    # 如果阿里云失败，尝试备用源
+    log_info "尝试备用安装源..."
+    if curl --connect-timeout 10 --max-time 60 -sS "$COMPOSER_INSTALL_BACKUP" | $PHP_CMD; then
+        if [ -f composer.phar ]; then
+            sudo mv composer.phar /usr/local/bin/composer
+            sudo chmod +x /usr/local/bin/composer
+            log_success "Composer 安装成功（备用源）"
+            return 0
+        fi
+    fi
+    
+    # 最后尝试官方源
+    log_info "尝试官方源（可能较慢）..."
+    if curl --connect-timeout 10 --max-time 60 -sS https://getcomposer.org/installer | $PHP_CMD; then
+        if [ -f composer.phar ]; then
+            sudo mv composer.phar /usr/local/bin/composer
+            sudo chmod +x /usr/local/bin/composer
+            log_success "Composer 安装成功（官方源）"
+            return 0
+        fi
+    fi
+    
+    log_error "Composer 安装失败，请检查网络连接"
+    return 1
+}
+
+# 检查并修复Composer
 check_composer() {
     log_info "检查Composer..."
     
@@ -569,48 +620,77 @@ check_composer() {
         fi
     fi
     
+    local need_reinstall=false
+    
     if command -v composer >/dev/null 2>&1; then
-        # 使用timeout避免卡住
-        local composer_version=$(timeout 5s composer --version 2>/dev/null | head -1)
-        if [ -n "$composer_version" ]; then
-            log_success "Composer已安装: $composer_version"
-        else
-            log_warning "Composer命令存在但无法获取版本信息（可能是wrapper问题）"
+        local composer_path=$(which composer)
+        
+        # 检查是否是wrapper脚本
+        if [ -f "$composer_path" ]; then
+            # 检查文件类型
+            local file_type=$(file -b "$composer_path" 2>/dev/null)
+            
+            # 如果是脚本文件，检查内容
+            if [[ "$file_type" == *"shell script"* ]] || [[ "$file_type" == *"bash"* ]] || [[ "$file_type" == *"text"* ]]; then
+                # 检查是否包含wrapper特征
+                if grep -q "BaoTa\|wrapper\|/www/server/php" "$composer_path" 2>/dev/null; then
+                    log_warning "检测到Composer是宝塔wrapper脚本"
+                    
+                    # 查找原始composer
+                    local original_found=false
+                    for orig in "/usr/bin/composer.original" "/usr/local/bin/composer.original" "${composer_path}.original"; do
+                        if [ -f "$orig" ]; then
+                            log_info "找到原始Composer: $orig"
+                            log_info "恢复原始Composer..."
+                            sudo mv "$orig" "$composer_path"
+                            original_found=true
+                            break
+                        fi
+                    done
+                    
+                    if [ "$original_found" = false ]; then
+                        log_warning "未找到原始Composer，需要重新安装"
+                        need_reinstall=true
+                        # 删除wrapper
+                        sudo rm -f "$composer_path"
+                    fi
+                fi
+            fi
         fi
         
-        # 检查Composer是否是wrapper
-        local composer_path=$(which composer)
-        if [ -f "$composer_path" ]; then
-            local file_type=$(file -b "$composer_path" 2>/dev/null)
-            if [[ "$file_type" == *"shell script"* ]] || [[ "$file_type" == *"bash"* ]]; then
-                if grep -q "BaoTa\|wrapper" "$composer_path" 2>/dev/null; then
-                    log_warning "检测到Composer是宝塔wrapper脚本"
-                    log_info "建议恢复原始Composer或重新安装"
-                fi
+        # 如果不需要重新安装，验证版本
+        if [ "$need_reinstall" = false ]; then
+            local composer_version=$(timeout 5s composer --version 2>/dev/null | head -1)
+            if [ -n "$composer_version" ]; then
+                log_success "Composer已安装: $composer_version"
+                
+                # 配置中国镜像源
+                log_info "配置Composer中国镜像源..."
+                composer config -g repo.packagist composer https://mirrors.aliyun.com/composer/ 2>/dev/null || true
+                composer config -g use-parent-dir true 2>/dev/null || true
+                log_success "已配置阿里云Composer镜像"
+                
+                return 0
+            else
+                log_warning "Composer命令存在但无法执行"
+                need_reinstall=true
             fi
         fi
     else
         log_warning "Composer未安装"
-        log_info "安装Composer..."
-        
-        # 下载并安装Composer（添加超时）
-        if curl --connect-timeout 10 --max-time 60 -sS https://getcomposer.org/installer | $PHP_CMD; then
-            if [ -f composer.phar ]; then
-                sudo mv composer.phar /usr/local/bin/composer
-                sudo chmod +x /usr/local/bin/composer
-            else
-                log_error "Composer安装程序未生成composer.phar"
-                return 1
-            fi
+        need_reinstall=true
+    fi
+    
+    # 如果需要重新安装
+    if [ "$need_reinstall" = true ]; then
+        if install_composer; then
+            # 配置中国镜像源
+            log_info "配置Composer中国镜像源..."
+            composer config -g repo.packagist composer https://mirrors.aliyun.com/composer/ 2>/dev/null || true
+            composer config -g use-parent-dir true 2>/dev/null || true
+            log_success "已配置阿里云Composer镜像"
+            return 0
         else
-            log_error "下载Composer安装程序失败"
-            return 1
-        fi
-        
-        if command -v composer >/dev/null 2>&1; then
-            log_success "Composer安装成功"
-        else
-            log_error "Composer安装失败"
             return 1
         fi
     fi
