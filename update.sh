@@ -546,9 +546,16 @@ optimize_backend() {
             log_info "优化 Composer 自动加载..."
             
             # 配置中国镜像源加速（如果在中国境内）
-            if ping -c 1 -W 1 mirrors.aliyun.com >/dev/null 2>&1; then
+            # 使用 timeout 避免卡住
+            if timeout 2s ping -c 1 mirrors.aliyun.com >/dev/null 2>&1; then
                 log_info "配置 Composer 中国镜像源..."
-                composer config -g repo.packagist composer https://mirrors.aliyun.com/composer/ 2>/dev/null || true
+                # 设置环境变量避免交互式提示
+                export COMPOSER_NO_INTERACTION=1
+                export COMPOSER_PROCESS_TIMEOUT=30
+                # 使用 timeout 限制执行时间
+                timeout 10s composer config -g repo.packagist composer https://mirrors.aliyun.com/composer/ 2>/dev/null || {
+                    log_warning "Composer 镜像源配置超时，跳过"
+                }
             fi
             
             # 获取正确的站点所有者
@@ -561,7 +568,8 @@ optimize_backend() {
             # 确保backend目录权限正确后再执行composer
             if [ "$EUID" -eq 0 ]; then
                 # 以root运行时，使用sudo切换到正确用户
-                if sudo -u "$COMPOSER_USER" composer dump-autoload --optimize --no-dev 2>/dev/null; then
+                # 使用 timeout 避免卡住，设置环境变量
+                if timeout 30s sudo -u "$COMPOSER_USER" env COMPOSER_NO_INTERACTION=1 COMPOSER_PROCESS_TIMEOUT=30 composer dump-autoload --optimize --no-dev 2>/dev/null; then
                     log_success "自动加载优化完成（包发现已自动执行）"
                 else
                     log_warning "自动加载优化失败，但不影响应用运行"
@@ -574,7 +582,8 @@ optimize_backend() {
                 fi
             else
                 # 非root用户直接执行
-                if composer dump-autoload --optimize --no-dev 2>/dev/null; then
+                # 使用 timeout 避免卡住
+                if timeout 30s env COMPOSER_NO_INTERACTION=1 COMPOSER_PROCESS_TIMEOUT=30 composer dump-autoload --optimize --no-dev 2>/dev/null; then
                     log_success "自动加载优化完成（包发现已自动执行）"
                 else
                     log_warning "自动加载优化失败，但不影响应用运行"
