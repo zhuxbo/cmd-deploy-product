@@ -60,9 +60,14 @@ pull_production_code() {
         cd production-code
     fi
     
-    # 读取版本信息
+    # 读取版本信息（兼容无 jq 环境）
     if [ -f "info.json" ]; then
-        VERSION=$(jq -r '.version' info.json 2>/dev/null || echo "unknown")
+        if command -v jq >/dev/null 2>&1; then
+            VERSION=$(jq -r '.version' info.json 2>/dev/null || true)
+        else
+            VERSION=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"\n]*\)".*/\1/p' info.json | head -n1)
+        fi
+        [ -z "$VERSION" ] && VERSION="unknown"
         log_success "版本: $VERSION"
     fi
     
@@ -174,62 +179,60 @@ initialize_laravel() {
 # 设置文件权限
 set_permissions() {
     log_info "设置文件权限..."
-    
+
     # 获取站点目录的所有者信息
     SITE_OWNER=$(stat -c "%U" "$SITE_ROOT")
     SITE_GROUP=$(stat -c "%G" "$SITE_ROOT")
-    
+
     # 设置后端权限
     if [ -d "$SITE_ROOT/backend" ]; then
         # 整体保持与站点目录一致的所有者
-        sudo chown -R "$SITE_OWNER:$SITE_GROUP" "$SITE_ROOT/backend" 2>/dev/null
-        
+        sudo chown -R "$SITE_OWNER:$SITE_GROUP" "$SITE_ROOT/backend" 2>/dev/null || log_warning "backend目录所有者设置失败"
+
         # 设置基础目录权限为755
-        sudo chmod 755 "$SITE_ROOT/backend" 2>/dev/null
-        
+        sudo chmod 755 "$SITE_ROOT/backend" 2>/dev/null || log_warning "backend目录权限设置失败"
+
         # 代码文件设置为644（只读）
         find "$SITE_ROOT/backend" -type f \( \
             -name "*.php" -o -name "*.js" -o -name "*.css" -o -name "*.xml" -o \
             -name "*.yml" -o -name "*.yaml" -o -name "*.md" -o -name "*.txt" -o \
             -name ".env*" -o -name "*.json" \
         \) -not -path "$SITE_ROOT/backend/storage/*" -not -path "$SITE_ROOT/backend/bootstrap/cache/*" \
-        -exec sudo chmod 644 {} + 2>/dev/null
-        
+        -print0 | xargs -0 -r -n 100 sudo chmod 644 || log_warning "backend代码文件权限设置失败"
+
         # Laravel 特殊文件处理
-        if [ -f "$SITE_ROOT/backend/artisan" ]; then
-            sudo chmod 755 "$SITE_ROOT/backend/artisan" 2>/dev/null
-        fi
-        
+        [ -f "$SITE_ROOT/backend/artisan" ] && sudo chmod 755 "$SITE_ROOT/backend/artisan" 2>/dev/null || log_warning "artisan文件权限设置失败"
+
         # Laravel 需要写入权限的目录
         if [ -d "$SITE_ROOT/backend/storage" ]; then
-            sudo chown -R "$SITE_OWNER:$SITE_GROUP" "$SITE_ROOT/backend/storage" 2>/dev/null
-            sudo chmod -R 775 "$SITE_ROOT/backend/storage" 2>/dev/null
-            find "$SITE_ROOT/backend/storage" -type f -exec sudo chmod 664 {} + 2>/dev/null
+            sudo chown -R "$SITE_OWNER:$SITE_GROUP" "$SITE_ROOT/backend/storage" 2>/dev/null || log_warning "storage目录所有者设置失败"
+            sudo chmod -R 775 "$SITE_ROOT/backend/storage" 2>/dev/null || log_warning "storage目录权限设置失败"
+            find "$SITE_ROOT/backend/storage" -type f -exec sudo chmod 664 {} + 2>/dev/null || log_warning "storage文件权限设置失败"
         fi
-        
+
         if [ -d "$SITE_ROOT/backend/bootstrap/cache" ]; then
-            sudo chown -R "$SITE_OWNER:$SITE_GROUP" "$SITE_ROOT/backend/bootstrap/cache" 2>/dev/null
-            sudo chmod -R 775 "$SITE_ROOT/backend/bootstrap/cache" 2>/dev/null
+            sudo chown -R "$SITE_OWNER:$SITE_GROUP" "$SITE_ROOT/backend/bootstrap/cache" 2>/dev/null || log_warning "bootstrap/cache目录所有者设置失败"
+            sudo chmod -R 775 "$SITE_ROOT/backend/bootstrap/cache" 2>/dev/null || log_warning "bootstrap/cache目录权限设置失败"
         fi
-        
+
         # 其他目录设置为755
-        find "$SITE_ROOT/backend" -type d -not -path "$SITE_ROOT/backend/storage*" -not -path "$SITE_ROOT/backend/bootstrap/cache*" -exec sudo chmod 755 {} + 2>/dev/null
+        find "$SITE_ROOT/backend" -type d -not -path "$SITE_ROOT/backend/storage*" -not -path "$SITE_ROOT/backend/bootstrap/cache*" -exec sudo chmod 755 {} + 2>/dev/null || log_warning "backend其他目录权限设置失败"
     fi
-    
+
     # 设置前端权限
     if [ -d "$SITE_ROOT/frontend" ]; then
-        sudo chown -R "$SITE_OWNER:$SITE_GROUP" "$SITE_ROOT/frontend" 2>/dev/null
-        find "$SITE_ROOT/frontend" -type d -exec sudo chmod 755 {} + 2>/dev/null
-        find "$SITE_ROOT/frontend" -type f -exec sudo chmod 644 {} + 2>/dev/null
+        sudo chown -R "$SITE_OWNER:$SITE_GROUP" "$SITE_ROOT/frontend" 2>/dev/null || log_warning "frontend目录所有者设置失败"
+        find "$SITE_ROOT/frontend" -type d -exec sudo chmod 755 {} + 2>/dev/null || log_warning "frontend目录权限设置失败"
+        find "$SITE_ROOT/frontend" -type f -print0 | xargs -0 -r -n 100 sudo chmod 644 || log_warning "frontend文件权限设置失败"
     fi
-    
+
     # 设置nginx目录权限
     if [ -d "$SITE_ROOT/nginx" ]; then
-        sudo chown -R "$SITE_OWNER:$SITE_GROUP" "$SITE_ROOT/nginx" 2>/dev/null
-        sudo chmod -R 755 "$SITE_ROOT/nginx" 2>/dev/null
-        find "$SITE_ROOT/nginx" -type f -exec sudo chmod 644 {} + 2>/dev/null
+        sudo chown -R "$SITE_OWNER:$SITE_GROUP" "$SITE_ROOT/nginx" 2>/dev/null || log_warning "nginx目录所有者设置失败"
+        sudo chmod -R 755 "$SITE_ROOT/nginx" 2>/dev/null || log_warning "nginx目录权限设置失败"
+        find "$SITE_ROOT/nginx" -type f -print0 | xargs -0 -r -n 100 sudo chmod 644 || log_warning "nginx文件权限设置失败"
     fi
-    
+
     log_success "权限设置完成"
 }
 
