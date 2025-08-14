@@ -6,20 +6,21 @@
 
 ### 核心脚本文件列表
 
-| 脚本文件 | 用途 | 环境要求 |
-|---------|------|----------|
-| install.sh | 首次安装脚本 | 通用 |
-| install-deps-bt.sh | 宝塔环境依赖安装 | 宝塔面板环境 |
-| install-deps.sh | 标准Linux环境依赖安装 | 非宝塔环境 |
-| setup-queue.sh | 标准Linux环境定时任务和队列设置 | 非宝塔环境 |
-| update.sh | 系统更新脚本 | 通用 |
-| keeper.sh | 备份管理脚本 | 通用 |
+| 脚本文件           | 用途                              | 环境要求     |
+| ------------------ | --------------------------------- | ------------ |
+| install.sh         | 首次安装脚本                      | 通用         |
+| install-deps-bt.sh | 宝塔环境依赖安装                  | 宝塔面板环境 |
+| install-deps.sh    | 标准 Linux 环境依赖安装           | 非宝塔环境   |
+| setup-queue.sh     | 标准 Linux 环境定时任务和队列设置 | 非宝塔环境   |
+| update.sh          | 系统更新脚本                      | 通用         |
+| keeper.sh          | 备份管理脚本                      | 通用         |
 
 ### 1. install.sh - 首次安装脚本
 
 用于全新安装证书管理系统。
 
 **功能特点：**
+
 - 从 production-code 仓库拉取生产代码
 - 自动备份现有部署（如果存在）
 - 部署所有系统文件
@@ -29,11 +30,13 @@
 - 安装完成后提示是否执行依赖检查
 
 **使用方法：**
+
 ```bash
 ./install.sh
 ```
 
 **后续步骤：**
+
 1. 编辑数据库配置：`vim backend/.env`
 2. 配置 Nginx：将 nginx/manager.conf 链接到系统配置
 3. 访问 `/install.php` 完成系统安装
@@ -41,17 +44,19 @@
 
 ### 2. install-deps-bt.sh - 宝塔环境依赖安装脚本
 
-专门用于宝塔面板环境的PHP依赖配置。
+专门用于宝塔面板环境的 PHP 依赖配置。
 
 **功能特点：**
-- 检测并选择宝塔PHP版本（8.3+）
-- 自动启用被禁用的PHP函数（exec, putenv, proc_open等）
-- 检测和卸载冲突的系统PHP包
-- 设置默认PHP版本链接
-- 检查并修复Composer wrapper问题
+
+- 检测并选择宝塔 PHP 版本（8.3+）
+- 自动启用被禁用的 PHP 函数（exec, putenv, proc_open 等）
+- 检测和卸载冲突的系统 PHP 包
+- 设置默认 PHP 版本链接
+- 检查并修复 Composer wrapper 问题
 - 深度诊断模式（-d 参数）
 
 **使用方法：**
+
 ```bash
 # 正常运行
 sudo ./install-deps-bt.sh
@@ -61,15 +66,17 @@ sudo ./install-deps-bt.sh -d
 ```
 
 **宝塔环境要求：**
-- 已安装PHP 8.3或更高版本
+
+- 已安装 PHP 8.3 或更高版本
 - 手动安装以下扩展：calendar, fileinfo, mbstring, redis
 - 其他扩展宝塔通常已预装
 
-### 3. install-deps.sh - 标准Linux环境依赖安装脚本
+### 3. install-deps.sh - 标准 Linux 环境依赖安装脚本
 
-专门用于标准Linux环境的PHP依赖安装。
+专门用于标准 Linux 环境的 PHP 依赖安装。
 
 **功能特点：**
+
 - 自动检测系统类型（Ubuntu/Debian/CentOS/RHEL/Fedora/openSUSE）
 - 安装 PHP 8.3+ 及所有必需扩展
 - 配置 PHP 优化参数
@@ -78,11 +85,13 @@ sudo ./install-deps-bt.sh -d
 - 自动检测宝塔环境并引导使用正确脚本
 
 **使用方法：**
+
 ```bash
 ./install-deps.sh
 ```
 
 **支持的系统：**
+
 - Ubuntu 18.04+
 - Debian 9+
 - CentOS 7+
@@ -92,9 +101,10 @@ sudo ./install-deps-bt.sh -d
 
 ### 4. setup-queue.sh - 自动设置定时任务和队列
 
-宝塔环境输出设置方法，标准Linux环境自动设置。
+宝塔环境输出设置方法，标准 Linux 环境自动设置。
 
 **使用方法：**
+
 ```bash
 ./setup-queue.sh
 ```
@@ -104,6 +114,7 @@ sudo ./install-deps-bt.sh -d
 用于更新已部署的系统到最新版本，支持备份恢复功能。
 
 **功能特点：**
+
 - 支持模块化更新（api/admin/user/easy/nginx/all）
 - 自动备份当前版本
 - 智能保留用户配置和数据
@@ -112,6 +123,7 @@ sudo ./install-deps-bt.sh -d
 - **备份恢复功能**：可恢复到之前的任何版本
 
 **使用方法：**
+
 ```bash
 # 更新操作
 ./update.sh                      # 更新所有模块
@@ -133,6 +145,7 @@ FORCE_UPDATE=1 ./update.sh
 ```
 
 **恢复功能说明：**
+
 - 每次更新前自动创建备份
 - 恢复时会创建紧急备份，确保可以回滚
 - 恢复包括系统文件、配置和权限设置
@@ -146,17 +159,19 @@ FORCE_UPDATE=1 ./update.sh
 专门备份 .env 文件和数据库，提供恢复功能。
 
 **功能特点：**
+
 - 备份 .env 配置文件
 - 自动备份 MySQL 数据库（压缩存储）
-- **自动排除 _logs 后缀的日志表**
+- **自动排除 \_logs 后缀的日志表**
 - 创建完整备份包（.tar.gz 格式）
-- 智能清理旧备份（默认保留30份）
+- 智能清理旧备份（默认保留 30 份）
 - 支持备份恢复和列表功能
-- 磁盘空间检查（最少需要1GB）
+- 磁盘空间检查（最少需要 1GB）
 - 支持重试机制和备份验证
 - 支持定时任务
 
 **使用方法：**
+
 ```bash
 # 执行备份（默认保留30份）
 ./keeper.sh backup
@@ -172,6 +187,7 @@ KEEP_BACKUPS=14 ./keeper.sh clean  # 保留14份
 ```
 
 **设置定时任务：**
+
 ```bash
 # 编辑 crontab
 crontab -e
@@ -183,6 +199,7 @@ crontab -e
 ## 目录结构
 
 部署后的目录结构（在站点根目录）：
+
 ```
 site-root/               # 站点根目录
 ├── backend/              # Laravel 后端应用
@@ -214,12 +231,13 @@ site-root/               # 站点根目录
 │   ├── install/         # install.sh 的备份
 │   ├── keeper/          # keeper.sh 的备份
 │   └── update/          # update.sh 的备份
-└── info.json            # 构建信息（包含版本）
+└── config.json            # 构建信息（包含版本）
 ```
 
 ## 典型部署流程
 
 ### 全新部署
+
 ```bash
 # 1. 在站点根目录中克隆部署脚本
 cd /path/to/{your-site}
@@ -240,6 +258,7 @@ cd cmd-deploy-scripts
 ```
 
 ### 日常维护
+
 ```bash
 # 进入部署目录
 cd /path/to/your-site/cmd-deploy-scripts
@@ -251,7 +270,7 @@ cd /path/to/your-site/cmd-deploy-scripts
 ./keeper.sh backup
 
 # 查看版本
-jq -r '.version' ../info.json
+jq -r '.version' ../config.json
 
 # 查看备份列表
 ./keeper.sh list
@@ -270,6 +289,7 @@ jq -r '.version' ../info.json
 ## 故障排查
 
 ### 系统恢复
+
 - **更新失败恢复**：使用 `./update.sh restore <备份名>` 恢复到之前版本
 - **数据库恢复**：使用 `./keeper.sh restore <备份文件>` 恢复数据库和配置
 - **查看可用备份**：
@@ -277,6 +297,7 @@ jq -r '.version' ../info.json
   - 数据备份：`./keeper.sh list`
 
 ### 常见问题
+
 - **安装失败**：检查 backup/install/ 目录中的备份进行恢复
 - **更新失败**：使用 `./update.sh list` 查看备份，然后恢复
 - **权限错误**：确保 Web 用户（站点目录所有者）对 storage 和 bootstrap/cache 有写权限
@@ -288,6 +309,7 @@ jq -r '.version' ../info.json
 ## 技术支持
 
 如遇问题，请检查：
+
 1. 脚本执行日志
 2. Laravel 日志：`backend/storage/logs/`
 3. Nginx 错误日志：`/var/log/nginx/error.log`

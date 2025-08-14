@@ -497,7 +497,7 @@ create_backup_package() {
     cat > "$TEMP_DIR/backup_info.txt" <<EOF
 备份时间: $(date)
 备份类型: 完整备份
-系统版本: $(jq -r '.version' "$SITE_ROOT/info.json" 2>/dev/null || echo "未知")
+系统版本: $(jq -r '.version' "$SITE_ROOT/config.json" 2>/dev/null || echo "未知")
 数据库: $DB_DATABASE
 
 包含文件:

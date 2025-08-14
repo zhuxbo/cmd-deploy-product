@@ -61,11 +61,11 @@ pull_production_code() {
     fi
     
     # 读取版本信息（兼容无 jq 环境）
-    if [ -f "info.json" ]; then
+    if [ -f "config.json" ]; then
         if command -v jq >/dev/null 2>&1; then
-            VERSION=$(jq -r '.version' info.json 2>/dev/null || true)
+            VERSION=$(jq -r '.version' config.json 2>/dev/null || true)
         else
-            VERSION=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"\n]*\)".*/\1/p' info.json | head -n1)
+            VERSION=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"\n]*\)".*/\1/p' config.json | head -n1)
         fi
         [ -z "$VERSION" ] && VERSION="unknown"
         log_success "版本: $VERSION"
@@ -134,8 +134,8 @@ deploy_files() {
     done
     
     # 复制构建信息文件
-    if [ -f "$SOURCE_PATH/info.json" ]; then
-        cp "$SOURCE_PATH/info.json" "$SITE_ROOT/"
+    if [ -f "$SOURCE_PATH/config.json" ]; then
+        cp "$SOURCE_PATH/config.json" "$SITE_ROOT/"
     fi
     
     log_success "部署完成"

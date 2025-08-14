@@ -11,7 +11,7 @@ backup/
 .env
 
 # 构建信息文件
-info.json
+config.json
 
 # 日志文件
 *.log
