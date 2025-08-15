@@ -3,6 +3,9 @@
 # 证书管理系统宝塔面板专用依赖检查脚本
 # 功能：检测并配置宝塔面板PHP 8.3+及必要的扩展
 
+# 重要提示：脚本使用了 set -e，但在主函数中禁用了它
+# 原因：某些函数使用非零返回值表示不同状态（如 check_composer 返回 2 表示需要升级）
+# 如果不禁用 set -e，这些函数会导致脚本意外退出
 set -e
 
 # 颜色定义
@@ -819,7 +822,7 @@ check_composer() {
         
         # 优先使用 www 用户执行（如果当前是 root）
         if [ "$EUID" -eq 0 ] && id -u www >/dev/null 2>&1; then
-            # 使用 www 用户执行 composer --version
+            # 使用 www 用户执行
             full_output=$(sudo -u www composer --version 2>&1)
             exit_code=$?
         else
@@ -847,7 +850,7 @@ check_composer() {
             composer_output=$(echo "$full_output" | grep -v "^PHP Deprecated\|^Deprecated\|^Warning" | head -1)
         fi
         
-        # DEBUG: $composer_output
+        # 提取版本信息
         
         if [ $exit_code -eq 124 ]; then
             log_warning "Composer 执行超时，可能存在网络问题"

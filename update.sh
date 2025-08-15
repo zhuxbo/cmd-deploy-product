@@ -3,6 +3,8 @@
 # 证书管理系统更新脚本
 # 功能：从 production-code 仓库更新系统
 
+# 注意：使用了 set -e，任何返回非零的命令都会导致脚本退出
+# 如果函数使用非零返回值表示状态，需要在 if 语句中调用或使用 || true
 set -e
 
 # 颜色定义
@@ -18,36 +20,45 @@ log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 log_warning() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 
-# 检测服务器是否在中国大陆（简化版）
+# 检测服务器是否在中国大陆（快速版）
 is_china_server() {
-    # 方法1: 检测到中国镜像站的延迟
-    local china_hosts=("mirrors.aliyun.com" "mirrors.tencent.com")
-    local low_latency_count=0
+    # 如果环境变量已设置，直接使用
+    if [ -n "$FORCE_CHINA_MIRROR" ]; then
+        [ "$FORCE_CHINA_MIRROR" = "1" ] && return 0 || return 1
+    fi
     
-    for host in "${china_hosts[@]}"; do
-        if ping -c 1 -W 1 "$host" >/dev/null 2>&1; then
-            local avg_time=$(ping -c 2 -W 1 "$host" 2>/dev/null | grep "avg" | awk -F'/' '{print $5}')
-            if [ -n "$avg_time" ]; then
-                local avg_ms=${avg_time%.*}
-                # 延迟小于50ms，很可能在中国大陆
-                [ "$avg_ms" -lt 50 ] && low_latency_count=$((low_latency_count + 1))
-            fi
+    # 方法1: 快速检查云服务商元数据（1秒超时）
+    # 阿里云 - 只有 cn- 开头的是中国区域
+    local aliyun_region=$(timeout 1 curl -s "http://100.100.100.200/latest/meta-data/region-id" 2>/dev/null || echo "")
+    if [ -n "$aliyun_region" ] && [[ "$aliyun_region" =~ ^cn- ]]; then
+        return 0
+    fi
+    
+    # 腾讯云 - 明确指定中国大陆区域
+    local tencent_region=$(timeout 1 curl -s "http://metadata.tencentyun.com/latest/meta-data/region" 2>/dev/null || echo "")
+    if [ -n "$tencent_region" ]; then
+        # 腾讯云中国大陆区域：ap-beijing, ap-shanghai, ap-guangzhou, ap-chengdu, ap-chongqing, ap-nanjing
+        if [[ "$tencent_region" =~ ^(ap-beijing|ap-shanghai|ap-guangzhou|ap-chengdu|ap-chongqing|ap-nanjing) ]]; then
+            return 0
         fi
-    done
-    
-    # 方法2: 检查云服务商元数据
-    # 阿里云
-    if curl -s -m 1 "http://100.100.100.200/latest/meta-data/region-id" 2>/dev/null | grep -qE "^cn-"; then
-        return 0
-    fi
-    # 腾讯云
-    if curl -s -m 1 "http://metadata.tencentyun.com/latest/meta-data/region" 2>/dev/null | grep -qE "^ap-beijing|^ap-shanghai|^ap-guangzhou"; then
-        return 0
+        # 如果能获取到区域但不是中国大陆，说明是海外腾讯云，直接返回非中国
+        return 1
     fi
     
-    # 如果至少一个中国镜像站延迟很低，认为在中国
-    [ $low_latency_count -ge 1 ] && return 0
+    # 华为云 - 只有 cn- 开头的是中国区域
+    local huawei_region=$(timeout 1 curl -s "http://169.254.169.254/latest/meta-data/region-id" 2>/dev/null || echo "")
+    if [ -n "$huawei_region" ] && [[ "$huawei_region" =~ ^cn- ]]; then
+        return 0
+    fi
     
+    # 方法2: 检测能否快速连接到中国镜像（使用 timeout 命令限制时间）
+    # 只测试一个镜像站，超时1秒
+    if timeout 1 bash -c "echo -n '' > /dev/tcp/mirrors.aliyun.com/443" 2>/dev/null; then
+        # 能快速连接，可能在中国
+        return 0
+    fi
+    
+    # 默认不使用中国镜像
     return 1
 }
 
