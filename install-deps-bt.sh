@@ -34,36 +34,35 @@ show_help() {
     echo ""
 }
 
-# 检测服务器是否在中国大陆（简化版）
+# 检测服务器是否在中国大陆（快速版）
 is_china_server() {
-    # 方法1: 检测到中国镜像站的延迟
-    local china_hosts=("mirrors.aliyun.com" "mirrors.tencent.com")
-    local low_latency_count=0
+    # 如果环境变量已设置，直接使用
+    if [ -n "$FORCE_CHINA_MIRROR" ]; then
+        [ "$FORCE_CHINA_MIRROR" = "1" ] && return 0 || return 1
+    fi
     
-    for host in "${china_hosts[@]}"; do
-        if ping -c 1 -W 1 "$host" >/dev/null 2>&1; then
-            local avg_time=$(ping -c 2 -W 1 "$host" 2>/dev/null | grep "avg" | awk -F'/' '{print $5}')
-            if [ -n "$avg_time" ]; then
-                local avg_ms=${avg_time%.*}
-                # 延迟小于50ms，很可能在中国大陆
-                [ "$avg_ms" -lt 50 ] && low_latency_count=$((low_latency_count + 1))
-            fi
-        fi
-    done
-    
-    # 方法2: 检查云服务商元数据
+    # 方法1: 快速检查云服务商元数据（1秒超时）
     # 阿里云
-    if curl -s -m 1 "http://100.100.100.200/latest/meta-data/region-id" 2>/dev/null | grep -qE "^cn-"; then
+    if timeout 1 curl -s "http://100.100.100.200/latest/meta-data/region-id" 2>/dev/null | grep -qE "^cn-"; then
         return 0
     fi
-    # 腾讯云
-    if curl -s -m 1 "http://metadata.tencentyun.com/latest/meta-data/region" 2>/dev/null | grep -qE "^ap-beijing|^ap-shanghai|^ap-guangzhou"; then
+    # 腾讯云  
+    if timeout 1 curl -s "http://metadata.tencentyun.com/latest/meta-data/region" 2>/dev/null | grep -qE "^ap-beijing|^ap-shanghai|^ap-guangzhou"; then
+        return 0
+    fi
+    # 华为云
+    if timeout 1 curl -s "http://169.254.169.254/latest/meta-data/region-id" 2>/dev/null | grep -qE "^cn-"; then
         return 0
     fi
     
-    # 如果至少一个中国镜像站延迟很低，认为在中国
-    [ $low_latency_count -ge 1 ] && return 0
+    # 方法2: 检测能否快速连接到中国镜像（使用 timeout 命令限制时间）
+    # 只测试一个镜像站，超时1秒
+    if timeout 1 bash -c "echo -n '' > /dev/tcp/mirrors.aliyun.com/443" 2>/dev/null; then
+        # 能快速连接，可能在中国
+        return 0
+    fi
     
+    # 默认不使用中国镜像
     return 1
 }
 
@@ -869,10 +868,25 @@ install_or_update_composer() {
     cd /tmp
     rm -f composer-setup.php composer.phar
     
-    # 根据地理位置选择下载源
+    # 快速检测地理位置（3秒超时）
+    local use_china_mirror=false
+    log_info "检测最佳下载源（最多等待3秒）..."
+    
+    # 使用超时控制来避免卡住
+    if timeout 3 bash -c "$(declare -f is_china_server); is_china_server"; then
+        use_china_mirror=true
+        log_info "检测到中国网络环境，使用国内镜像"
+    else
+        log_info "使用国际镜像源"
+    fi
+    
+    # 提示用户可以强制指定镜像源
+    log_info "提示：可通过环境变量强制指定: FORCE_CHINA_MIRROR=1 使用中国镜像"
+    
+    # 根据检测结果选择下载源
     local installer_urls=()
     
-    if is_china_server; then
+    if [ "$use_china_mirror" = true ]; then
         # 中国大陆优先使用国内镜像
         installer_urls=(
             "https://mirrors.aliyun.com/composer/composer.phar"
@@ -894,21 +908,33 @@ install_or_update_composer() {
         log_info "尝试从 $url 下载..."
         
         if [[ "$url" == *".phar" ]]; then
-            if timeout 30s curl -sS "$url" -o composer.phar; then
+            # 使用 --progress-bar 显示进度，--max-time 设置总超时
+            if timeout 20s curl --progress-bar --max-time 15 -L "$url" -o composer.phar 2>&1 | grep -v "^$"; then
                 if /usr/bin/php composer.phar --version >/dev/null 2>&1; then
                     log_success "下载 composer.phar 成功"
                     download_success=true
                     break
+                else
+                    log_warning "下载的文件无效，尝试下一个源..."
+                    rm -f composer.phar
                 fi
+            else
+                log_warning "下载超时或失败，尝试下一个源..."
             fi
         else
-            if timeout 30s curl -sS "$url" -o composer-setup.php; then
+            # 安装脚本
+            if timeout 20s curl --progress-bar --max-time 15 -L "$url" -o composer-setup.php 2>&1 | grep -v "^$"; then
                 if /usr/bin/php composer-setup.php --quiet; then
                     rm -f composer-setup.php
                     log_success "安装脚本执行成功"
                     download_success=true
                     break
+                else
+                    log_warning "安装脚本执行失败，尝试下一个源..."
+                    rm -f composer-setup.php
                 fi
+            else
+                log_warning "下载超时或失败，尝试下一个源..."
             fi
         fi
     done
@@ -926,8 +952,8 @@ install_or_update_composer() {
         return 1
     fi
     
-    # 根据地理位置配置镜像源
-    if is_china_server; then
+    # 根据之前的检测结果配置镜像源
+    if [ "$use_china_mirror" = true ]; then
         log_info "配置 Composer 中国镜像源..."
         composer config -g repo.packagist composer https://mirrors.aliyun.com/composer/ 2>/dev/null || true
         # 为www用户也配置镜像源
