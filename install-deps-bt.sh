@@ -27,10 +27,14 @@ show_help() {
     echo "选项:"
     echo "  -h, --help       显示此帮助信息"
     echo "  -d, --diagnose   运行PHP扩展深度诊断"
+    echo "  --china          强制使用中国镜像源"
+    echo "  --intl           强制使用国际镜像源"
     echo ""
     echo "示例:"
-    echo "  $0               # 正常运行依赖检查"
+    echo "  $0               # 正常运行依赖检查（自动检测地理位置）"
     echo "  $0 --diagnose    # 运行深度诊断"
+    echo "  $0 --china       # 强制使用中国镜像源（适合中国大陆服务器）"
+    echo "  $0 --intl        # 强制使用国际镜像源（适合海外服务器）"
     echo ""
 }
 
@@ -885,18 +889,26 @@ install_or_update_composer() {
     
     # 快速检测地理位置（3秒超时）
     local use_china_mirror=false
-    log_info "检测最佳下载源（最多等待3秒）..."
     
-    # 使用超时控制来避免卡住
-    if timeout 3 bash -c "$(declare -f is_china_server); is_china_server"; then
-        use_china_mirror=true
-        log_info "检测到中国网络环境，使用国内镜像"
+    # 如果没有强制指定，则自动检测
+    if [ -z "$FORCE_CHINA_MIRROR" ]; then
+        log_info "检测最佳下载源（最多等待3秒）..."
+        # 使用超时控制来避免卡住
+        if timeout 3 bash -c "$(declare -f is_china_server); is_china_server"; then
+            use_china_mirror=true
+            log_info "检测到中国网络环境，使用国内镜像"
+        else
+            log_info "使用国际镜像源"
+        fi
     else
-        log_info "使用国际镜像源"
+        # 已通过参数强制指定
+        if [ "$FORCE_CHINA_MIRROR" = "1" ]; then
+            use_china_mirror=true
+            log_info "使用中国镜像源（通过参数指定）"
+        else
+            log_info "使用国际镜像源（通过参数指定）"
+        fi
     fi
-    
-    # 提示用户可以强制指定镜像源
-    log_info "提示：可通过环境变量强制指定: FORCE_CHINA_MIRROR=1 使用中国镜像"
     
     # 根据检测结果选择下载源
     local installer_urls=()
@@ -1398,6 +1410,16 @@ main() {
                 ;;
             -d|--diagnose)
                 run_diagnose=true
+                shift
+                ;;
+            --china)
+                export FORCE_CHINA_MIRROR=1
+                log_info "强制使用中国镜像源"
+                shift
+                ;;
+            --intl|--international)
+                export FORCE_CHINA_MIRROR=0
+                log_info "强制使用国际镜像源"
                 shift
                 ;;
             *)

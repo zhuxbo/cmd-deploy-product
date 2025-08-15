@@ -26,18 +26,27 @@ show_help() {
     echo ""
     echo "选项:"
     echo "  -h, --help       显示此帮助信息"
+    echo "  --china          强制使用中国镜像源"
+    echo "  --intl           强制使用国际镜像源"
     echo ""
     echo "说明:"
     echo "  本脚本仅适用于标准Linux环境"
     echo "  如果是宝塔面板环境，请使用 install-deps-bt.sh 脚本"
     echo ""
     echo "示例:"
-    echo "  $0               # 检查和安装运行环境依赖"
+    echo "  $0               # 检查和安装运行环境依赖（自动检测地理位置）"
+    echo "  $0 --china       # 强制使用中国镜像源（适合中国大陆服务器）"
+    echo "  $0 --intl        # 强制使用国际镜像源（适合海外服务器）"
     echo ""
 }
 
 # 检测服务器是否在中国大陆（简化版）
 is_china_server() {
+    # 如果环境变量已设置，直接使用
+    if [ -n "$FORCE_CHINA_MIRROR" ]; then
+        [ "$FORCE_CHINA_MIRROR" = "1" ] && return 0 || return 1
+    fi
+    
     # 方法1: 检测到中国镜像站的延迟
     local china_hosts=("mirrors.aliyun.com" "mirrors.tencent.com")
     local low_latency_count=0
@@ -1174,6 +1183,16 @@ main() {
             -h|--help)
                 show_help
                 exit 0
+                ;;
+            --china)
+                export FORCE_CHINA_MIRROR=1
+                log_info "强制使用中国镜像源"
+                shift
+                ;;
+            --intl|--international)
+                export FORCE_CHINA_MIRROR=0
+                log_info "强制使用国际镜像源"
+                shift
                 ;;
             *)
                 log_error "未知参数: $1"
