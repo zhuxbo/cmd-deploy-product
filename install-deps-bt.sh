@@ -792,6 +792,7 @@ install_jdk17() {
 # 检查Composer
 # 返回值：0=版本满足要求，1=未安装，2=需要升级
 check_composer() {
+    echo
     log_info "检查Composer..."
     
     if command -v composer >/dev/null 2>&1; then
@@ -800,7 +801,7 @@ check_composer() {
         
         # 优先使用 www 用户执行（如果当前是 root）
         if [ "$EUID" -eq 0 ] && id -u www >/dev/null 2>&1; then
-            log_info "[DEBUG] 使用 www 用户执行 composer --version"
+            # 使用 www 用户执行 composer --version
             full_output=$(sudo -u www composer --version 2>&1)
             exit_code=$?
         else
@@ -828,7 +829,7 @@ check_composer() {
             composer_output=$(echo "$full_output" | grep -v "^PHP Deprecated\|^Deprecated\|^Warning" | head -1)
         fi
         
-        log_info "[DEBUG] Composer版本行: $composer_output"
+        # DEBUG: $composer_output
         
         if [ $exit_code -eq 124 ]; then
             log_warning "Composer 执行超时，可能存在网络问题"
@@ -838,15 +839,13 @@ check_composer() {
             if [ -n "$composer_version" ]; then
                 log_success "Composer $composer_version 已安装"
                 # 检查版本是否满足要求（>= 2.8.0）
-                log_info "[DEBUG] 准备比较版本: $composer_version vs 2.8.0"
+                # 检查版本是否满足要求（>= 2.8.0）
                 if version_compare "$composer_version" "2.8.0"; then
                     # 版本 >= 2.8.0，满足要求
-                    log_info "[DEBUG] 版本满足要求，返回 0"
                     return 0
                 else
                     # 版本 < 2.8.0，需要升级
                     log_warning "Composer 版本 $composer_version 低于推荐版本 2.8.0，需要升级"
-                    log_info "[DEBUG] 版本过低，返回 2"
                     return 2  # 返回2表示需要升级
                 fi
             else
@@ -1333,6 +1332,9 @@ handle_bt_panel() {
 
 # 主函数
 main() {
+    # 在主函数中禁用 set -e，因为我们需要处理函数返回值
+    set +e
+    
     # 参数解析
     local run_diagnose=false
     
@@ -1388,20 +1390,26 @@ main() {
     fi
     
     # 检查Composer状态
-    log_info "[DEBUG] 开始检查Composer状态..."
     check_composer
     local composer_status=$?
-    log_info "[DEBUG] check_composer返回值: $composer_status"
     
-    if [ $composer_status -eq 1 ]; then
-        log_info "Composer未安装，自动安装..."
-        install_or_update_composer
-    elif [ $composer_status -eq 2 ]; then
-        log_info "Composer版本过低，自动升级到最新版本..."
-        install_or_update_composer
-    else
-        log_success "Composer版本满足要求（>= 2.8.0），无需更新"
-    fi
+    # 根据返回值执行对应操作
+    case $composer_status in
+        0)
+            log_success "Composer版本满足要求（>= 2.8.0），无需更新"
+            ;;
+        1)
+            log_info "Composer未安装，自动安装..."
+            install_or_update_composer
+            ;;
+        2)
+            log_info "Composer版本过低，自动升级到最新版本..."
+            install_or_update_composer
+            ;;
+        *)
+            log_error "未知的Composer状态: $composer_status"
+            ;;
+    esac
     
     # 3. 检查 JDK
     echo
