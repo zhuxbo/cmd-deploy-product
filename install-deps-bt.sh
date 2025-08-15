@@ -760,10 +760,20 @@ check_composer() {
         export COMPOSER_NO_INTERACTION=1
         export COMPOSER_ALLOW_SUPERUSER=1
         
-        local composer_output=$(timeout -k 3s 10s composer --version 2>&1 | grep -v "Deprecated\|Warning" | head -1)
+        # 先获取完整输出
+        local full_output=$(timeout -k 3s 10s composer --version 2>&1)
         local exit_code=$?
         
-        log_info "[DEBUG] Composer命令输出: $composer_output"
+        # 尝试提取版本行（可能在Deprecated警告之后）
+        local composer_output=$(echo "$full_output" | grep "Composer version" | head -1)
+        
+        # 如果没找到，尝试获取第一行非警告内容
+        if [ -z "$composer_output" ]; then
+            composer_output=$(echo "$full_output" | grep -v "^PHP Deprecated\|^Deprecated\|^Warning" | head -1)
+        fi
+        
+        log_info "[DEBUG] Composer完整输出前3行: $(echo "$full_output" | head -3 | tr '\n' ' ')"
+        log_info "[DEBUG] Composer提取输出: $composer_output"
         log_info "[DEBUG] Composer命令返回码: $exit_code"
         
         if [ $exit_code -eq 124 ]; then
@@ -1006,12 +1016,20 @@ diagnose_php_extension_issues() {
             if [ "$EUID" -eq 0 ]; then
                 # root权限时，切换到www用户执行
                 log_info "    使用www用户执行composer..."
-                composer_version=$(sudo -u www bash -c "$composer_cmd" 2>&1 | grep -v "Deprecated\|Warning" | head -1)
+                local full_output=$(sudo -u www bash -c "$composer_cmd" 2>&1)
                 composer_error=$?
+                composer_version=$(echo "$full_output" | grep "Composer version" | head -1)
+                if [ -z "$composer_version" ]; then
+                    composer_version=$(echo "$full_output" | grep -v "^PHP Deprecated\|^Deprecated\|^Warning" | head -1)
+                fi
             else
                 # 非root直接执行
-                composer_version=$(timeout 5s $composer_cmd 2>&1 | grep -v "Deprecated\|Warning" | head -1)
+                local full_output=$(timeout 5s $composer_cmd 2>&1)
                 composer_error=$?
+                composer_version=$(echo "$full_output" | grep "Composer version" | head -1)
+                if [ -z "$composer_version" ]; then
+                    composer_version=$(echo "$full_output" | grep -v "^PHP Deprecated\|^Deprecated\|^Warning" | head -1)
+                fi
             fi
             
             if [ $composer_error -eq 0 ] && [[ "$composer_version" == *"Composer version"* ]]; then

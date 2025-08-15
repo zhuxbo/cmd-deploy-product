@@ -108,10 +108,22 @@ main() {
     
     if command -v composer >/dev/null 2>&1; then
         log_info "Composer 已安装"
+        log_info "Composer 路径: $(which composer)"
         
-        # 获取版本
-        local composer_output=$(timeout -k 3s 10s composer --version 2>&1 | grep -v "Deprecated\|Warning" | head -1)
-        log_info "原始输出: $composer_output"
+        # 获取原始输出（不过滤）
+        log_info "获取原始输出（包含所有信息）..."
+        local raw_output=$(timeout -k 3s 10s composer --version 2>&1)
+        log_info "完整原始输出:"
+        echo "$raw_output"
+        echo "---"
+        
+        # 获取过滤后的版本
+        local composer_output=$(echo "$raw_output" | grep -v "Deprecated\|Warning" | head -1)
+        log_info "过滤后输出: $composer_output"
+        
+        # 尝试另一种方式获取版本
+        local composer_output2=$(timeout -k 3s 10s composer --version 2>&1 | grep "Composer version")
+        log_info "使用grep 'Composer version'的输出: $composer_output2"
         
         local composer_version=$(echo "$composer_output" | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' | head -1)
         if [ -n "$composer_version" ]; then
