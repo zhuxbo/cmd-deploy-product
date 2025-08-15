@@ -38,16 +38,42 @@ echo "---"
 COMPOSER_NO_INTERACTION=1 COMPOSER_ALLOW_SUPERUSER=1 composer --version 2>&1
 echo
 
-echo "方法7: 检查 composer 文件类型"
+echo "方法7: 使用 --no-interaction 参数"
+echo "---"
+COMPOSER_ALLOW_SUPERUSER=1 composer --version --no-interaction 2>&1
+echo
+
+echo "方法8: 使用 echo n 自动响应"
+echo "---"
+echo 'n' | composer --version 2>&1
+echo
+
+echo "方法9: 以 www 用户执行（如果存在）"
+echo "---"
+if id -u www >/dev/null 2>&1; then
+    sudo -u www composer --version 2>&1
+else
+    echo "www 用户不存在"
+fi
+echo
+
+echo "方法10: 检查 composer 文件类型"
 echo "---"
 COMPOSER_PATH=$(which composer)
 echo "Composer 路径: $COMPOSER_PATH"
 file "$COMPOSER_PATH"
 echo
 
-echo "方法8: 查看 composer 文件前几行（如果是脚本）"
+echo "方法11: 查看 composer 文件前几行（如果是脚本）"
 echo "---"
 head -5 "$COMPOSER_PATH"
+echo
+
+echo "方法12: 直接用PHP执行composer（如果是phar）"
+echo "---"
+if [ -f "$COMPOSER_PATH" ]; then
+    php "$COMPOSER_PATH" --version 2>&1
+fi
 echo
 
 echo "========================================="

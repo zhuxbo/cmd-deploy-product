@@ -757,12 +757,23 @@ check_composer() {
     log_info "检查Composer..."
     
     if command -v composer >/dev/null 2>&1; then
+        # 设置环境变量，允许root运行且不需要交互
         export COMPOSER_NO_INTERACTION=1
         export COMPOSER_ALLOW_SUPERUSER=1
+        export COMPOSER_ALLOW_XDEBUG=1
         
-        # 先获取完整输出
-        local full_output=$(timeout -k 3s 10s composer --version 2>&1)
+        # 使用 echo 'n' 来自动响应提示，或者使用 --no-interaction 参数
+        local full_output=$(echo 'n' | timeout -k 3s 10s composer --version --no-interaction 2>&1)
         local exit_code=$?
+        
+        # 如果上面失败，尝试以 www 用户执行
+        if [ -z "$full_output" ] || [[ "$full_output" == *"Continue as root"* ]]; then
+            log_info "[DEBUG] Root执行失败，尝试以www用户执行"
+            if [ "$EUID" -eq 0 ] && id -u www >/dev/null 2>&1; then
+                full_output=$(sudo -u www composer --version 2>&1)
+                exit_code=$?
+            fi
+        fi
         
         # 尝试提取版本行（可能在Deprecated警告之后）
         local composer_output=$(echo "$full_output" | grep "Composer version" | head -1)
