@@ -34,6 +34,39 @@ show_help() {
     echo ""
 }
 
+# 检测服务器是否在中国大陆（简化版）
+is_china_server() {
+    # 方法1: 检测到中国镜像站的延迟
+    local china_hosts=("mirrors.aliyun.com" "mirrors.tencent.com")
+    local low_latency_count=0
+    
+    for host in "${china_hosts[@]}"; do
+        if ping -c 1 -W 1 "$host" >/dev/null 2>&1; then
+            local avg_time=$(ping -c 2 -W 1 "$host" 2>/dev/null | grep "avg" | awk -F'/' '{print $5}')
+            if [ -n "$avg_time" ]; then
+                local avg_ms=${avg_time%.*}
+                # 延迟小于50ms，很可能在中国大陆
+                [ "$avg_ms" -lt 50 ] && low_latency_count=$((low_latency_count + 1))
+            fi
+        fi
+    done
+    
+    # 方法2: 检查云服务商元数据
+    # 阿里云
+    if curl -s -m 1 "http://100.100.100.200/latest/meta-data/region-id" 2>/dev/null | grep -qE "^cn-"; then
+        return 0
+    fi
+    # 腾讯云
+    if curl -s -m 1 "http://metadata.tencentyun.com/latest/meta-data/region" 2>/dev/null | grep -qE "^ap-beijing|^ap-shanghai|^ap-guangzhou"; then
+        return 0
+    fi
+    
+    # 如果至少一个中国镜像站延迟很低，认为在中国
+    [ $low_latency_count -ge 1 ] && return 0
+    
+    return 1
+}
+
 # 版本比较函数
 version_compare() {
     local version1="$1"
@@ -589,14 +622,18 @@ install_jdk17() {
     
     # Ubuntu/Debian 系统
     if command -v apt-get >/dev/null 2>&1; then
-        # 检查并配置中国镜像源
-        if [ -f /etc/apt/sources.list ] && ! grep -q "mirrors.aliyun.com\|mirrors.tuna" /etc/apt/sources.list; then
-            log_info "配置 APT 中国镜像源..."
-            sudo cp /etc/apt/sources.list /etc/apt/sources.list.bak
-            sudo sed -i 's|http://[a-z][a-z].archive.ubuntu.com|http://mirrors.aliyun.com|g' /etc/apt/sources.list
-            sudo sed -i 's|http://archive.ubuntu.com|http://mirrors.aliyun.com|g' /etc/apt/sources.list
-            sudo sed -i 's|http://security.ubuntu.com|http://mirrors.aliyun.com|g' /etc/apt/sources.list
-            sudo sed -i 's|http://deb.debian.org|http://mirrors.aliyun.com|g' /etc/apt/sources.list
+        # 只有在中国大陆服务器上才配置中国镜像源
+        if is_china_server; then
+            if [ -f /etc/apt/sources.list ] && ! grep -q "mirrors.aliyun.com\|mirrors.tuna" /etc/apt/sources.list; then
+                log_info "检测到中国大陆服务器，配置 APT 中国镜像源..."
+                sudo cp /etc/apt/sources.list /etc/apt/sources.list.bak
+                sudo sed -i 's|http://[a-z][a-z].archive.ubuntu.com|http://mirrors.aliyun.com|g' /etc/apt/sources.list
+                sudo sed -i 's|http://archive.ubuntu.com|http://mirrors.aliyun.com|g' /etc/apt/sources.list
+                sudo sed -i 's|http://security.ubuntu.com|http://mirrors.aliyun.com|g' /etc/apt/sources.list
+                sudo sed -i 's|http://deb.debian.org|http://mirrors.aliyun.com|g' /etc/apt/sources.list
+            fi
+        else
+            log_info "检测到海外服务器，使用默认 APT 源..."
         fi
         log_info "使用 apt 安装 OpenJDK 17..."
         if sudo apt-get update >/dev/null 2>&1 && sudo apt-get install -y openjdk-17-jdk >/dev/null 2>&1; then
@@ -612,12 +649,16 @@ install_jdk17() {
         fi
     # CentOS/RHEL 系统
     elif command -v yum >/dev/null 2>&1; then
-        # 配置中国镜像源（如果尚未配置）
-        if [ -f /etc/yum.repos.d/CentOS-Base.repo ] && ! grep -q "mirrors.aliyun.com\|mirrors.tuna" /etc/yum.repos.d/CentOS-Base.repo; then
-            log_info "配置 YUM 中国镜像源..."
-            sudo cp /etc/yum.repos.d/CentOS-Base.repo /etc/yum.repos.d/CentOS-Base.repo.bak
-            sudo sed -i 's|mirrorlist=|#mirrorlist=|g' /etc/yum.repos.d/CentOS-Base.repo
-            sudo sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://mirrors.aliyun.com|g' /etc/yum.repos.d/CentOS-Base.repo
+        # 只有在中国大陆服务器上才配置中国镜像源
+        if is_china_server; then
+            if [ -f /etc/yum.repos.d/CentOS-Base.repo ] && ! grep -q "mirrors.aliyun.com\|mirrors.tuna" /etc/yum.repos.d/CentOS-Base.repo; then
+                log_info "检测到中国大陆服务器，配置 YUM 中国镜像源..."
+                sudo cp /etc/yum.repos.d/CentOS-Base.repo /etc/yum.repos.d/CentOS-Base.repo.bak
+                sudo sed -i 's|mirrorlist=|#mirrorlist=|g' /etc/yum.repos.d/CentOS-Base.repo
+                sudo sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://mirrors.aliyun.com|g' /etc/yum.repos.d/CentOS-Base.repo
+            fi
+        else
+            log_info "检测到海外服务器，使用默认 YUM 源..."
         fi
         log_info "使用 yum 安装 OpenJDK 17..."
         # CentOS 8+ / RHEL 8+
@@ -633,12 +674,16 @@ install_jdk17() {
         fi
     # Fedora 系统
     elif command -v dnf >/dev/null 2>&1; then
-        # 配置中国镜像源
-        if [ -f /etc/yum.repos.d/fedora.repo ] && ! grep -q "mirrors.aliyun.com\|mirrors.tuna" /etc/yum.repos.d/fedora.repo; then
-            log_info "配置 DNF 中国镜像源..."
-            sudo cp /etc/yum.repos.d/fedora.repo /etc/yum.repos.d/fedora.repo.bak
-            sudo sed -i 's|metalink=|#metalink=|g' /etc/yum.repos.d/fedora.repo
-            sudo sed -i 's|#baseurl=http://download.example/pub/fedora/linux|baseurl=https://mirrors.aliyun.com/fedora|g' /etc/yum.repos.d/fedora.repo
+        # 只有在中国大陆服务器上才配置中国镜像源
+        if is_china_server; then
+            if [ -f /etc/yum.repos.d/fedora.repo ] && ! grep -q "mirrors.aliyun.com\|mirrors.tuna" /etc/yum.repos.d/fedora.repo; then
+                log_info "检测到中国大陆服务器，配置 DNF 中国镜像源..."
+                sudo cp /etc/yum.repos.d/fedora.repo /etc/yum.repos.d/fedora.repo.bak
+                sudo sed -i 's|metalink=|#metalink=|g' /etc/yum.repos.d/fedora.repo
+                sudo sed -i 's|#baseurl=http://download.example/pub/fedora/linux|baseurl=https://mirrors.aliyun.com/fedora|g' /etc/yum.repos.d/fedora.repo
+            fi
+        else
+            log_info "检测到海外服务器，使用默认 DNF 源..."
         fi
         log_info "使用 dnf 安装 OpenJDK 17..."
         if sudo dnf install -y java-17-openjdk java-17-openjdk-devel >/dev/null 2>&1; then
@@ -679,11 +724,20 @@ install_jdk17() {
                 ;;
         esac
         
-        # 下载 OpenJDK 17 (使用清华大学镜像)
-        local jdk_url="https://mirrors.tuna.tsinghua.edu.cn/Adoptium/17/jdk/x64/linux/OpenJDK17U-jdk_${jdk_arch}_linux_hotspot_17.0.9_9.tar.gz"
+        # 下载 OpenJDK 17
         local jdk_file="/tmp/openjdk-17.tar.gz"
+        local jdk_url=""
         
-        log_info "从清华镜像下载 OpenJDK 17..."
+        if is_china_server; then
+            # 中国大陆使用清华镜像
+            jdk_url="https://mirrors.tuna.tsinghua.edu.cn/Adoptium/17/jdk/x64/linux/OpenJDK17U-jdk_${jdk_arch}_linux_hotspot_17.0.9_9.tar.gz"
+            log_info "从清华镜像下载 OpenJDK 17..."
+        else
+            # 海外使用官方源
+            jdk_url="https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.9%2B9/OpenJDK17U-jdk_${jdk_arch}_linux_hotspot_17.0.9_9.tar.gz"
+            log_info "从官方源下载 OpenJDK 17..."
+        fi
+        
         if curl -L -o "$jdk_file" "$jdk_url" >/dev/null 2>&1 || wget -O "$jdk_file" "$jdk_url" >/dev/null 2>&1; then
             # 解压到 /opt/java
             sudo mkdir -p /opt/java
@@ -813,13 +867,24 @@ install_or_update_composer() {
     cd /tmp
     rm -f composer-setup.php composer.phar
     
-    # 使用国内镜像下载
-    local installer_urls=(
-        "https://mirrors.aliyun.com/composer/composer.phar"
-        "https://mirrors.cloud.tencent.com/composer/composer.phar"
-        "https://install.phpcomposer.com/installer"
-        "https://getcomposer.org/installer"
-    )
+    # 根据地理位置选择下载源
+    local installer_urls=()
+    
+    if is_china_server; then
+        # 中国大陆优先使用国内镜像
+        installer_urls=(
+            "https://mirrors.aliyun.com/composer/composer.phar"
+            "https://mirrors.cloud.tencent.com/composer/composer.phar"
+            "https://install.phpcomposer.com/installer"
+            "https://getcomposer.org/installer"
+        )
+    else
+        # 海外优先使用官方源
+        installer_urls=(
+            "https://getcomposer.org/installer"
+            "https://github.com/composer/composer/releases/latest/download/composer.phar"
+        )
+    fi
     
     local download_success=false
     
@@ -859,12 +924,21 @@ install_or_update_composer() {
         return 1
     fi
     
-    # 配置中国镜像源
-    log_info "配置 Composer 中国镜像源..."
-    composer config -g repo.packagist composer https://mirrors.aliyun.com/composer/ 2>/dev/null || true
-    # 为www用户也配置镜像源
-    if [ "$EUID" -eq 0 ]; then
-        sudo -u www composer config -g repo.packagist composer https://mirrors.aliyun.com/composer/ 2>/dev/null || true
+    # 根据地理位置配置镜像源
+    if is_china_server; then
+        log_info "配置 Composer 中国镜像源..."
+        composer config -g repo.packagist composer https://mirrors.aliyun.com/composer/ 2>/dev/null || true
+        # 为www用户也配置镜像源
+        if [ "$EUID" -eq 0 ]; then
+            sudo -u www composer config -g repo.packagist composer https://mirrors.aliyun.com/composer/ 2>/dev/null || true
+        fi
+    else
+        log_info "使用 Composer 官方源..."
+        # 确保使用官方源（移除可能存在的中国镜像配置）
+        composer config -g --unset repos.packagist 2>/dev/null || true
+        if [ "$EUID" -eq 0 ]; then
+            sudo -u www composer config -g --unset repos.packagist 2>/dev/null || true
+        fi
     fi
     
     # 验证安装
