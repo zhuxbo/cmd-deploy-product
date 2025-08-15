@@ -838,12 +838,15 @@ check_composer() {
             if [ -n "$composer_version" ]; then
                 log_success "Composer $composer_version 已安装"
                 # 检查版本是否满足要求（>= 2.8.0）
+                log_info "[DEBUG] 准备比较版本: $composer_version vs 2.8.0"
                 if version_compare "$composer_version" "2.8.0"; then
                     # 版本 >= 2.8.0，满足要求
+                    log_info "[DEBUG] 版本满足要求，返回 0"
                     return 0
                 else
                     # 版本 < 2.8.0，需要升级
                     log_warning "Composer 版本 $composer_version 低于推荐版本 2.8.0，需要升级"
+                    log_info "[DEBUG] 版本过低，返回 2"
                     return 2  # 返回2表示需要升级
                 fi
             else
@@ -1385,8 +1388,10 @@ main() {
     fi
     
     # 检查Composer状态
+    log_info "[DEBUG] 开始检查Composer状态..."
     check_composer
     local composer_status=$?
+    log_info "[DEBUG] check_composer返回值: $composer_status"
     
     if [ $composer_status -eq 1 ]; then
         log_info "Composer未安装，自动安装..."
