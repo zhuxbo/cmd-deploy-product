@@ -837,8 +837,8 @@ check_composer() {
             local composer_version=$(echo "$composer_output" | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' | head -1)
             if [ -n "$composer_version" ]; then
                 log_success "Composer $composer_version 已安装"
-                # 检查版本是否低于 2.8.0
-                if version_compare "2.8.0" "$composer_version"; then
+                # 检查版本是否满足要求（>= 2.8.0）
+                if version_compare "$composer_version" "2.8.0"; then
                     # 版本 >= 2.8.0，满足要求
                     return 0
                 else
@@ -1109,7 +1109,7 @@ diagnose_php_extension_issues() {
                 # 检查版本是否需要升级
                 local current_version=$(echo "$composer_version" | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' | head -1)
                 if [ -n "$current_version" ]; then
-                    if ! version_compare "2.8.0" "$current_version"; then
+                    if ! version_compare "$current_version" "2.8.0"; then
                         log_warning "  ! Composer 版本 $current_version 低于推荐版本 2.8.0，需要升级"
                         composer_version_issue=true
                         has_issue=true
@@ -1126,7 +1126,7 @@ diagnose_php_extension_issues() {
                     log_info "    $clean_version"
                     # 检查版本
                     local current_version=$(echo "$clean_version" | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' | head -1)
-                    if [ -n "$current_version" ] && ! version_compare "2.8.0" "$current_version"; then
+                    if [ -n "$current_version" ] && ! version_compare "$current_version" "2.8.0"; then
                         log_warning "  ! Composer 版本 $current_version 低于推荐版本 2.8.0，需要升级"
                         composer_version_issue=true
                         has_issue=true
