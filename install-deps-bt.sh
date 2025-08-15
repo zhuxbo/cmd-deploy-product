@@ -754,7 +754,12 @@ check_composer() {
             if [ -n "$composer_version" ]; then
                 log_success "Composer $composer_version 已安装"
                 
-                if ! version_compare "$composer_version" "2.8.0"; then
+                # 检查版本是否低于 2.8.0
+                if version_compare "2.8.0" "$composer_version"; then
+                    # 版本 >= 2.8.0，满足要求
+                    return 0
+                else
+                    # 版本 < 2.8.0，需要升级
                     log_warning "Composer 版本 $composer_version 低于推荐版本 2.8.0"
                     return 1
                 fi
@@ -862,6 +867,7 @@ diagnose_php_extension_issues() {
     local system_php_issue=false
     local composer_wrapper_issue=false
     local composer_missing=false
+    local composer_version_issue=false
     
     echo
     log_info "=== 步骤1: 检查 /usr/bin/php 配置 ==="
@@ -972,17 +978,48 @@ diagnose_php_extension_issues() {
             if [ "$EUID" -eq 0 ]; then
                 # root权限时，切换到www用户执行
                 log_info "    使用www用户执行composer..."
-                composer_version=$(sudo -u www bash -c "$composer_cmd" 2>&1 | head -1)
+                composer_version=$(sudo -u www bash -c "$composer_cmd" 2>&1 | grep -v "Deprecated\|Warning" | head -1)
                 composer_error=$?
             else
                 # 非root直接执行
-                composer_version=$(timeout 5s $composer_cmd 2>&1 | head -1)
+                composer_version=$(timeout 5s $composer_cmd 2>&1 | grep -v "Deprecated\|Warning" | head -1)
                 composer_error=$?
             fi
             
             if [ $composer_error -eq 0 ] && [[ "$composer_version" == *"Composer version"* ]]; then
                 log_success "  [OK] Composer可以正常执行"
                 log_info "    $composer_version"
+                
+                # 检查版本是否需要升级
+                local current_version=$(echo "$composer_version" | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' | head -1)
+                if [ -n "$current_version" ]; then
+                    if ! version_compare "2.8.0" "$current_version"; then
+                        log_warning "  ! Composer 版本 $current_version 低于推荐版本 2.8.0，需要升级"
+                        composer_version_issue=true
+                        has_issue=true
+                    fi
+                fi
+            elif [ $composer_error -eq 124 ]; then
+                log_error "  [FAIL] Composer执行超时"
+                has_issue=true
+            elif [[ "$composer_version" == *"Deprecated"* ]] || [[ "$composer_version" == *"PHP Deprecated"* ]]; then
+                # 如果只是 Deprecated 警告，尝试从后续行获取版本
+                local clean_version=$(timeout 5s $composer_cmd 2>&1 | grep "Composer version" | head -1)
+                if [ -n "$clean_version" ]; then
+                    log_warning "  [WARN] Composer有Deprecated警告，但可以执行"
+                    log_info "    $clean_version"
+                    # 检查版本
+                    local current_version=$(echo "$clean_version" | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' | head -1)
+                    if [ -n "$current_version" ] && ! version_compare "2.8.0" "$current_version"; then
+                        log_warning "  ! Composer 版本 $current_version 低于推荐版本 2.8.0，需要升级"
+                        composer_version_issue=true
+                        has_issue=true
+                    fi
+                else
+                    log_error "  [FAIL] Composer执行失败"
+                    log_info "    输出: $composer_version"
+                    has_issue=true
+                fi
             else
                 log_error "  [FAIL] Composer执行失败"
                 log_info "    输出: $composer_version"
@@ -1023,9 +1060,9 @@ diagnose_php_extension_issues() {
                 fix_composer_wrapper
             fi
             
-            # 4. 安装Composer（如果缺失）
-            if [ "$composer_missing" = true ]; then
-                log_info "正在安装Composer..."
+            # 4. 安装或更新Composer（如果缺失或版本过低）
+            if [ "$composer_missing" = true ] || [ "$composer_version_issue" = true ]; then
+                log_info "正在安装或更新Composer..."
                 install_or_update_composer
             fi
             
