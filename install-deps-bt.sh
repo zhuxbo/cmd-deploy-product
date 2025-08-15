@@ -43,21 +43,11 @@ version_compare() {
     version1=$(echo "$version1" | sed 's/^v//' | sed 's/-.*//')
     version2=$(echo "$version2" | sed 's/^v//' | sed 's/-.*//')
     
-    # 调试信息
-    log_info "[DEBUG] version_compare: 比较 $version1 >= $version2"
-    
     # 使用 sort -V 进行版本比较
     if command -v sort >/dev/null 2>&1; then
         local sorted_versions=$(printf '%s\n%s' "$version1" "$version2" | sort -V)
         local lowest=$(echo "$sorted_versions" | head -n1)
-        log_info "[DEBUG] sort -V 结果: 最低版本是 $lowest"
-        if [ "$lowest" = "$version2" ]; then
-            log_info "[DEBUG] $version1 >= $version2 返回 true (0)"
-            return 0
-        else
-            log_info "[DEBUG] $version1 < $version2 返回 false (1)"
-            return 1
-        fi
+        [ "$lowest" = "$version2" ] && return 0 || return 1
     else
         # 降级到简单的数字比较
         local v1_major=$(echo "$version1" | cut -d. -f1)
@@ -66,21 +56,15 @@ version_compare() {
         local v2_major=$(echo "$version2" | cut -d. -f1)
         local v2_minor=$(echo "$version2" | cut -d. -f2)
         
-        log_info "[DEBUG] 使用简单比较: v1=$v1_major.$v1_minor vs v2=$v2_major.$v2_minor"
-        
         if [ "$v1_major" -gt "$v2_major" ]; then
-            log_info "[DEBUG] 主版本号 $v1_major > $v2_major 返回 true (0)"
             return 0
         elif [ "$v1_major" -lt "$v2_major" ]; then
-            log_info "[DEBUG] 主版本号 $v1_major < $v2_major 返回 false (1)"
             return 1
         fi
         
         if [ "$v1_minor" -ge "$v2_minor" ]; then
-            log_info "[DEBUG] 次版本号 $v1_minor >= $v2_minor 返回 true (0)"
             return 0
         else
-            log_info "[DEBUG] 次版本号 $v1_minor < $v2_minor 返回 false (1)"
             return 1
         fi
     fi
@@ -757,20 +741,27 @@ check_composer() {
     log_info "检查Composer..."
     
     if command -v composer >/dev/null 2>&1; then
-        # 设置环境变量，允许root运行且不需要交互
-        export COMPOSER_NO_INTERACTION=1
-        export COMPOSER_ALLOW_SUPERUSER=1
-        export COMPOSER_ALLOW_XDEBUG=1
+        local full_output=""
+        local exit_code=0
         
-        # 使用 echo 'n' 来自动响应提示，或者使用 --no-interaction 参数
-        local full_output=$(echo 'n' | timeout -k 3s 10s composer --version --no-interaction 2>&1)
-        local exit_code=$?
-        
-        # 如果上面失败，尝试以 www 用户执行
-        if [ -z "$full_output" ] || [[ "$full_output" == *"Continue as root"* ]]; then
-            log_info "[DEBUG] Root执行失败，尝试以www用户执行"
-            if [ "$EUID" -eq 0 ] && id -u www >/dev/null 2>&1; then
-                full_output=$(sudo -u www composer --version 2>&1)
+        # 优先使用 www 用户执行（如果当前是 root）
+        if [ "$EUID" -eq 0 ] && id -u www >/dev/null 2>&1; then
+            log_info "[DEBUG] 使用 www 用户执行 composer --version"
+            full_output=$(sudo -u www composer --version 2>&1)
+            exit_code=$?
+        else
+            # 非 root 用户或 www 用户不存在时
+            export COMPOSER_NO_INTERACTION=1
+            export COMPOSER_ALLOW_SUPERUSER=1
+            
+            # 尝试使用 --no-interaction 参数
+            full_output=$(timeout -k 3s 10s composer --version --no-interaction 2>&1)
+            exit_code=$?
+            
+            # 如果还是失败，尝试用 yes 响应
+            if [[ "$full_output" == *"Continue as root"* ]]; then
+                log_info "[DEBUG] 检测到root提示，使用yes响应"
+                full_output=$(echo 'yes' | timeout -k 3s 10s composer --version 2>&1)
                 exit_code=$?
             fi
         fi
@@ -783,9 +774,7 @@ check_composer() {
             composer_output=$(echo "$full_output" | grep -v "^PHP Deprecated\|^Deprecated\|^Warning" | head -1)
         fi
         
-        log_info "[DEBUG] Composer完整输出前3行: $(echo "$full_output" | head -3 | tr '\n' ' ')"
-        log_info "[DEBUG] Composer提取输出: $composer_output"
-        log_info "[DEBUG] Composer命令返回码: $exit_code"
+        log_info "[DEBUG] Composer版本行: $composer_output"
         
         if [ $exit_code -eq 124 ]; then
             log_warning "Composer 执行超时，可能存在网络问题"
@@ -794,17 +783,13 @@ check_composer() {
             local composer_version=$(echo "$composer_output" | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' | head -1)
             if [ -n "$composer_version" ]; then
                 log_success "Composer $composer_version 已安装"
-                log_info "[DEBUG] 检测到Composer版本: $composer_version"
-                
                 # 检查版本是否低于 2.8.0
                 if version_compare "2.8.0" "$composer_version"; then
                     # 版本 >= 2.8.0，满足要求
-                    log_info "[DEBUG] 版本比较结果: $composer_version >= 2.8.0，满足要求"
                     return 0
                 else
                     # 版本 < 2.8.0，需要升级
-                    log_warning "Composer 版本 $composer_version 低于推荐版本 2.8.0"
-                    log_info "[DEBUG] 版本比较结果: $composer_version < 2.8.0，需要升级"
+                    log_warning "Composer 版本 $composer_version 低于推荐版本 2.8.0，需要升级"
                     return 2  # 返回2表示需要升级
                 fi
             else
@@ -1328,16 +1313,15 @@ main() {
     # 检查Composer状态
     check_composer
     local composer_status=$?
-    log_info "[DEBUG] check_composer返回值: $composer_status"
     
     if [ $composer_status -eq 1 ]; then
         log_info "Composer未安装，自动安装..."
         install_or_update_composer
     elif [ $composer_status -eq 2 ]; then
-        log_info "Composer版本过低，自动升级..."
+        log_info "Composer版本过低，自动升级到最新版本..."
         install_or_update_composer
     else
-        log_success "Composer版本满足要求，无需更新"
+        log_success "Composer版本满足要求（>= 2.8.0），无需更新"
     fi
     
     # 3. 检查 JDK
