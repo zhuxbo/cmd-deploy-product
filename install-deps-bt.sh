@@ -42,24 +42,39 @@ is_china_server() {
     fi
     
     # 方法1: 快速检查云服务商元数据（1秒超时）
-    # 阿里云
-    if timeout 1 curl -s "http://100.100.100.200/latest/meta-data/region-id" 2>/dev/null | grep -qE "^cn-"; then
-        return 0
-    fi
-    # 腾讯云  
-    if timeout 1 curl -s "http://metadata.tencentyun.com/latest/meta-data/region" 2>/dev/null | grep -qE "^ap-beijing|^ap-shanghai|^ap-guangzhou"; then
-        return 0
-    fi
-    # 华为云
-    if timeout 1 curl -s "http://169.254.169.254/latest/meta-data/region-id" 2>/dev/null | grep -qE "^cn-"; then
+    # 阿里云 - 只有 cn- 开头的是中国区域
+    local aliyun_region=$(timeout 1 curl -s "http://100.100.100.200/latest/meta-data/region-id" 2>/dev/null || echo "")
+    if [ -n "$aliyun_region" ] && [[ "$aliyun_region" =~ ^cn- ]]; then
         return 0
     fi
     
-    # 方法2: 检测能否快速连接到中国镜像（使用 timeout 命令限制时间）
-    # 只测试一个镜像站，超时1秒
-    if timeout 1 bash -c "echo -n '' > /dev/tcp/mirrors.aliyun.com/443" 2>/dev/null; then
-        # 能快速连接，可能在中国
+    # 腾讯云 - 明确指定中国大陆区域
+    local tencent_region=$(timeout 1 curl -s "http://metadata.tencentyun.com/latest/meta-data/region" 2>/dev/null || echo "")
+    if [ -n "$tencent_region" ]; then
+        # 腾讯云中国大陆区域：ap-beijing, ap-shanghai, ap-guangzhou, ap-chengdu, ap-chongqing, ap-nanjing
+        if [[ "$tencent_region" =~ ^(ap-beijing|ap-shanghai|ap-guangzhou|ap-chengdu|ap-chongqing|ap-nanjing) ]]; then
+            return 0
+        fi
+        # 如果能获取到区域但不是中国大陆，说明是海外腾讯云，直接返回非中国
+        return 1
+    fi
+    
+    # 华为云 - 只有 cn- 开头的是中国区域
+    local huawei_region=$(timeout 1 curl -s "http://169.254.169.254/latest/meta-data/region-id" 2>/dev/null || echo "")
+    if [ -n "$huawei_region" ] && [[ "$huawei_region" =~ ^cn- ]]; then
         return 0
+    fi
+    
+    # 方法2: 比较到不同镜像站的延迟（更准确的方法）
+    # 测试到中国镜像和国际镜像的连接时间
+    local china_time=$(timeout 1 bash -c "time (echo -n '' > /dev/tcp/mirrors.aliyun.com/443) 2>&1" 2>/dev/null | grep real | awk '{print $2}' | sed 's/[^0-9.]//g')
+    local intl_time=$(timeout 1 bash -c "time (echo -n '' > /dev/tcp/github.com/443) 2>&1" 2>/dev/null | grep real | awk '{print $2}' | sed 's/[^0-9.]//g')
+    
+    # 如果两个都能连接，比较延迟
+    if [ -n "$china_time" ] && [ -n "$intl_time" ]; then
+        # 使用 awk 进行浮点数比较
+        local is_china=$(awk "BEGIN { if ($china_time < $intl_time) print 1; else print 0 }")
+        [ "$is_china" = "1" ] && return 0
     fi
     
     # 默认不使用中国镜像
@@ -909,32 +924,43 @@ install_or_update_composer() {
         
         if [[ "$url" == *".phar" ]]; then
             # 使用 --progress-bar 显示进度，--max-time 设置总超时
-            if timeout 20s curl --progress-bar --max-time 15 -L "$url" -o composer.phar 2>&1 | grep -v "^$"; then
-                if /usr/bin/php composer.phar --version >/dev/null 2>&1; then
+            # 先下载文件
+            timeout 20s curl --progress-bar --max-time 15 -L "$url" -o composer.phar
+            local curl_result=$?
+            
+            if [ $curl_result -eq 0 ] && [ -f composer.phar ]; then
+                # 验证下载的文件（添加超时控制）
+                if timeout 5s /usr/bin/php composer.phar --version >/dev/null 2>&1; then
                     log_success "下载 composer.phar 成功"
                     download_success=true
                     break
                 else
-                    log_warning "下载的文件无效，尝试下一个源..."
+                    log_warning "下载的文件无效或验证超时，尝试下一个源..."
                     rm -f composer.phar
                 fi
             else
                 log_warning "下载超时或失败，尝试下一个源..."
+                rm -f composer.phar
             fi
         else
             # 安装脚本
-            if timeout 20s curl --progress-bar --max-time 15 -L "$url" -o composer-setup.php 2>&1 | grep -v "^$"; then
-                if /usr/bin/php composer-setup.php --quiet; then
+            timeout 20s curl --progress-bar --max-time 15 -L "$url" -o composer-setup.php
+            local curl_result=$?
+            
+            if [ $curl_result -eq 0 ] && [ -f composer-setup.php ]; then
+                # 执行安装脚本（添加超时控制）
+                if timeout 10s /usr/bin/php composer-setup.php --quiet; then
                     rm -f composer-setup.php
                     log_success "安装脚本执行成功"
                     download_success=true
                     break
                 else
-                    log_warning "安装脚本执行失败，尝试下一个源..."
+                    log_warning "安装脚本执行失败或超时，尝试下一个源..."
                     rm -f composer-setup.php
                 fi
             else
                 log_warning "下载超时或失败，尝试下一个源..."
+                rm -f composer-setup.php
             fi
         fi
     done
