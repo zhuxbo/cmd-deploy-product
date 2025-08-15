@@ -43,11 +43,21 @@ version_compare() {
     version1=$(echo "$version1" | sed 's/^v//' | sed 's/-.*//')
     version2=$(echo "$version2" | sed 's/^v//' | sed 's/-.*//')
     
+    # 调试信息
+    log_info "[DEBUG] version_compare: 比较 $version1 >= $version2"
+    
     # 使用 sort -V 进行版本比较
     if command -v sort >/dev/null 2>&1; then
         local sorted_versions=$(printf '%s\n%s' "$version1" "$version2" | sort -V)
         local lowest=$(echo "$sorted_versions" | head -n1)
-        [ "$lowest" = "$version2" ] && return 0 || return 1
+        log_info "[DEBUG] sort -V 结果: 最低版本是 $lowest"
+        if [ "$lowest" = "$version2" ]; then
+            log_info "[DEBUG] $version1 >= $version2 返回 true (0)"
+            return 0
+        else
+            log_info "[DEBUG] $version1 < $version2 返回 false (1)"
+            return 1
+        fi
     else
         # 降级到简单的数字比较
         local v1_major=$(echo "$version1" | cut -d. -f1)
@@ -56,15 +66,21 @@ version_compare() {
         local v2_major=$(echo "$version2" | cut -d. -f1)
         local v2_minor=$(echo "$version2" | cut -d. -f2)
         
+        log_info "[DEBUG] 使用简单比较: v1=$v1_major.$v1_minor vs v2=$v2_major.$v2_minor"
+        
         if [ "$v1_major" -gt "$v2_major" ]; then
+            log_info "[DEBUG] 主版本号 $v1_major > $v2_major 返回 true (0)"
             return 0
         elif [ "$v1_major" -lt "$v2_major" ]; then
+            log_info "[DEBUG] 主版本号 $v1_major < $v2_major 返回 false (1)"
             return 1
         fi
         
         if [ "$v1_minor" -ge "$v2_minor" ]; then
+            log_info "[DEBUG] 次版本号 $v1_minor >= $v2_minor 返回 true (0)"
             return 0
         else
+            log_info "[DEBUG] 次版本号 $v1_minor < $v2_minor 返回 false (1)"
             return 1
         fi
     fi
@@ -736,6 +752,7 @@ install_jdk17() {
 }
 
 # 检查Composer
+# 返回值：0=版本满足要求，1=未安装，2=需要升级
 check_composer() {
     log_info "检查Composer..."
     
@@ -746,6 +763,9 @@ check_composer() {
         local composer_output=$(timeout -k 3s 10s composer --version 2>&1 | grep -v "Deprecated\|Warning" | head -1)
         local exit_code=$?
         
+        log_info "[DEBUG] Composer命令输出: $composer_output"
+        log_info "[DEBUG] Composer命令返回码: $exit_code"
+        
         if [ $exit_code -eq 124 ]; then
             log_warning "Composer 执行超时，可能存在网络问题"
             return 1
@@ -753,22 +773,30 @@ check_composer() {
             local composer_version=$(echo "$composer_output" | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' | head -1)
             if [ -n "$composer_version" ]; then
                 log_success "Composer $composer_version 已安装"
+                log_info "[DEBUG] 检测到Composer版本: $composer_version"
                 
                 # 检查版本是否低于 2.8.0
                 if version_compare "2.8.0" "$composer_version"; then
                     # 版本 >= 2.8.0，满足要求
+                    log_info "[DEBUG] 版本比较结果: $composer_version >= 2.8.0，满足要求"
                     return 0
                 else
                     # 版本 < 2.8.0，需要升级
                     log_warning "Composer 版本 $composer_version 低于推荐版本 2.8.0"
-                    return 1
+                    log_info "[DEBUG] 版本比较结果: $composer_version < 2.8.0，需要升级"
+                    return 2  # 返回2表示需要升级
                 fi
-                return 0
+            else
+                log_warning "[DEBUG] 无法从输出中提取版本号"
+                return 1
             fi
+        else
+            log_warning "[DEBUG] Composer命令无输出"
+            return 1
         fi
     else
         log_warning "Composer未安装"
-        return 1
+        return 1  # 返回1表示未安装
     fi
 }
 
@@ -1268,9 +1296,19 @@ main() {
         fix_bt_composer_php
     fi
     
-    if ! check_composer; then
-        log_info "自动安装 Composer..."
+    # 检查Composer状态
+    check_composer
+    local composer_status=$?
+    log_info "[DEBUG] check_composer返回值: $composer_status"
+    
+    if [ $composer_status -eq 1 ]; then
+        log_info "Composer未安装，自动安装..."
         install_or_update_composer
+    elif [ $composer_status -eq 2 ]; then
+        log_info "Composer版本过低，自动升级..."
+        install_or_update_composer
+    else
+        log_success "Composer版本满足要求，无需更新"
     fi
     
     # 3. 检查 JDK
