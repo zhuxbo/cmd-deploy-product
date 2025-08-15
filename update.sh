@@ -18,6 +18,39 @@ log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 log_warning() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 
+# 检测服务器是否在中国大陆（简化版）
+is_china_server() {
+    # 方法1: 检测到中国镜像站的延迟
+    local china_hosts=("mirrors.aliyun.com" "mirrors.tencent.com")
+    local low_latency_count=0
+    
+    for host in "${china_hosts[@]}"; do
+        if ping -c 1 -W 1 "$host" >/dev/null 2>&1; then
+            local avg_time=$(ping -c 2 -W 1 "$host" 2>/dev/null | grep "avg" | awk -F'/' '{print $5}')
+            if [ -n "$avg_time" ]; then
+                local avg_ms=${avg_time%.*}
+                # 延迟小于50ms，很可能在中国大陆
+                [ "$avg_ms" -lt 50 ] && low_latency_count=$((low_latency_count + 1))
+            fi
+        fi
+    done
+    
+    # 方法2: 检查云服务商元数据
+    # 阿里云
+    if curl -s -m 1 "http://100.100.100.200/latest/meta-data/region-id" 2>/dev/null | grep -qE "^cn-"; then
+        return 0
+    fi
+    # 腾讯云
+    if curl -s -m 1 "http://metadata.tencentyun.com/latest/meta-data/region" 2>/dev/null | grep -qE "^ap-beijing|^ap-shanghai|^ap-guangzhou"; then
+        return 0
+    fi
+    
+    # 如果至少一个中国镜像站延迟很低，认为在中国
+    [ $low_latency_count -ge 1 ] && return 0
+    
+    return 1
+}
+
 # 获取脚本所在目录（deploy目录）
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # 获取站点根目录（site目录）
@@ -118,14 +151,16 @@ check_dependencies() {
         
         # Ubuntu/Debian 系统
         if command -v apt-get >/dev/null 2>&1; then
-            # 配置中国镜像源
-            if [ -f /etc/apt/sources.list ] && ! grep -q "mirrors.aliyun.com\|mirrors.tuna" /etc/apt/sources.list; then
-                log_info "配置 APT 中国镜像源..."
-                sudo cp /etc/apt/sources.list /etc/apt/sources.list.bak
-                sudo sed -i 's|http://[a-z][a-z].archive.ubuntu.com|http://mirrors.aliyun.com|g' /etc/apt/sources.list
-                sudo sed -i 's|http://archive.ubuntu.com|http://mirrors.aliyun.com|g' /etc/apt/sources.list
-                sudo sed -i 's|http://security.ubuntu.com|http://mirrors.aliyun.com|g' /etc/apt/sources.list
-                sudo sed -i 's|http://deb.debian.org|http://mirrors.aliyun.com|g' /etc/apt/sources.list
+            # 只有在中国大陆服务器上才配置中国镜像源
+            if is_china_server; then
+                if [ -f /etc/apt/sources.list ] && ! grep -q "mirrors.aliyun.com\|mirrors.tuna" /etc/apt/sources.list; then
+                    log_info "检测到中国大陆服务器，配置 APT 中国镜像源..."
+                    sudo cp /etc/apt/sources.list /etc/apt/sources.list.bak
+                    sudo sed -i 's|http://[a-z][a-z].archive.ubuntu.com|http://mirrors.aliyun.com|g' /etc/apt/sources.list
+                    sudo sed -i 's|http://archive.ubuntu.com|http://mirrors.aliyun.com|g' /etc/apt/sources.list
+                    sudo sed -i 's|http://security.ubuntu.com|http://mirrors.aliyun.com|g' /etc/apt/sources.list
+                    sudo sed -i 's|http://deb.debian.org|http://mirrors.aliyun.com|g' /etc/apt/sources.list
+                fi
             fi
             log_info "检测到 Ubuntu/Debian 系统，使用 apt 安装 jq..."
             if sudo apt-get update >/dev/null 2>&1 && sudo apt-get install -y jq >/dev/null 2>&1; then
@@ -133,24 +168,28 @@ check_dependencies() {
             fi
         # CentOS/RHEL/Fedora 系统
         elif command -v yum >/dev/null 2>&1; then
-            # 配置中国镜像源
-            if [ -f /etc/yum.repos.d/CentOS-Base.repo ] && ! grep -q "mirrors.aliyun.com\|mirrors.tuna" /etc/yum.repos.d/CentOS-Base.repo; then
-                log_info "配置 YUM 中国镜像源..."
-                sudo cp /etc/yum.repos.d/CentOS-Base.repo /etc/yum.repos.d/CentOS-Base.repo.bak
-                sudo sed -i 's|mirrorlist=|#mirrorlist=|g' /etc/yum.repos.d/CentOS-Base.repo
-                sudo sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://mirrors.aliyun.com|g' /etc/yum.repos.d/CentOS-Base.repo
+            # 只有在中国大陆服务器上才配置中国镜像源
+            if is_china_server; then
+                if [ -f /etc/yum.repos.d/CentOS-Base.repo ] && ! grep -q "mirrors.aliyun.com\|mirrors.tuna" /etc/yum.repos.d/CentOS-Base.repo; then
+                    log_info "检测到中国大陆服务器，配置 YUM 中国镜像源..."
+                    sudo cp /etc/yum.repos.d/CentOS-Base.repo /etc/yum.repos.d/CentOS-Base.repo.bak
+                    sudo sed -i 's|mirrorlist=|#mirrorlist=|g' /etc/yum.repos.d/CentOS-Base.repo
+                    sudo sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://mirrors.aliyun.com|g' /etc/yum.repos.d/CentOS-Base.repo
+                fi
             fi
             log_info "检测到 CentOS/RHEL 系统，使用 yum 安装 jq..."
             if sudo yum install -y jq >/dev/null 2>&1; then
                 install_success=true
             fi
         elif command -v dnf >/dev/null 2>&1; then
-            # 配置中国镜像源
-            if [ -f /etc/yum.repos.d/fedora.repo ] && ! grep -q "mirrors.aliyun.com\|mirrors.tuna" /etc/yum.repos.d/fedora.repo; then
-                log_info "配置 DNF 中国镜像源..."
-                sudo cp /etc/yum.repos.d/fedora.repo /etc/yum.repos.d/fedora.repo.bak
-                sudo sed -i 's|metalink=|#metalink=|g' /etc/yum.repos.d/fedora.repo
-                sudo sed -i 's|#baseurl=http://download.example/pub/fedora/linux|baseurl=https://mirrors.aliyun.com/fedora|g' /etc/yum.repos.d/fedora.repo
+            # 只有在中国大陆服务器上才配置中国镜像源
+            if is_china_server; then
+                if [ -f /etc/yum.repos.d/fedora.repo ] && ! grep -q "mirrors.aliyun.com\|mirrors.tuna" /etc/yum.repos.d/fedora.repo; then
+                    log_info "检测到中国大陆服务器，配置 DNF 中国镜像源..."
+                    sudo cp /etc/yum.repos.d/fedora.repo /etc/yum.repos.d/fedora.repo.bak
+                    sudo sed -i 's|metalink=|#metalink=|g' /etc/yum.repos.d/fedora.repo
+                    sudo sed -i 's|#baseurl=http://download.example/pub/fedora/linux|baseurl=https://mirrors.aliyun.com/fedora|g' /etc/yum.repos.d/fedora.repo
+                fi
             fi
             log_info "检测到 Fedora 系统，使用 dnf 安装 jq..."
             if sudo dnf install -y jq >/dev/null 2>&1; then
@@ -158,14 +197,16 @@ check_dependencies() {
             fi
         # Arch Linux
         elif command -v pacman >/dev/null 2>&1; then
-            # 配置中国镜像源
-            if [ -f /etc/pacman.d/mirrorlist ] && ! grep -q "mirrors.aliyun.com\|mirrors.tuna" /etc/pacman.d/mirrorlist; then
-                log_info "配置 Pacman 中国镜像源..."
-                sudo cp /etc/pacman.d/mirrorlist /etc/pacman.d/mirrorlist.bak
-                echo 'Server = https://mirrors.aliyun.com/archlinux/$repo/os/$arch' | sudo tee /etc/pacman.d/mirrorlist.china
-                echo 'Server = https://mirrors.tuna.tsinghua.edu.cn/archlinux/$repo/os/$arch' | sudo tee -a /etc/pacman.d/mirrorlist.china
-                sudo cat /etc/pacman.d/mirrorlist >> /etc/pacman.d/mirrorlist.china
-                sudo mv /etc/pacman.d/mirrorlist.china /etc/pacman.d/mirrorlist
+            # 只有在中国大陆服务器上才配置中国镜像源
+            if is_china_server; then
+                if [ -f /etc/pacman.d/mirrorlist ] && ! grep -q "mirrors.aliyun.com\|mirrors.tuna" /etc/pacman.d/mirrorlist; then
+                    log_info "检测到中国大陆服务器，配置 Pacman 中国镜像源..."
+                    sudo cp /etc/pacman.d/mirrorlist /etc/pacman.d/mirrorlist.bak
+                    echo 'Server = https://mirrors.aliyun.com/archlinux/$repo/os/$arch' | sudo tee /etc/pacman.d/mirrorlist.china
+                    echo 'Server = https://mirrors.tuna.tsinghua.edu.cn/archlinux/$repo/os/$arch' | sudo tee -a /etc/pacman.d/mirrorlist.china
+                    sudo cat /etc/pacman.d/mirrorlist >> /etc/pacman.d/mirrorlist.china
+                    sudo mv /etc/pacman.d/mirrorlist.china /etc/pacman.d/mirrorlist
+                fi
             fi
             log_info "检测到 Arch Linux 系统，使用 pacman 安装 jq..."
             if sudo pacman -Sy --noconfirm jq >/dev/null 2>&1; then
@@ -545,9 +586,8 @@ optimize_backend() {
         if command -v composer &> /dev/null; then
             log_info "优化 Composer 自动加载..."
             
-            # 配置中国镜像源加速（如果在中国境内）
-            # 使用 timeout 避免卡住
-            if timeout 2s ping -c 1 mirrors.aliyun.com >/dev/null 2>&1; then
+            # 根据地理位置配置镜像源
+            if is_china_server; then
                 log_info "配置 Composer 中国镜像源..."
                 # 设置环境变量避免交互式提示
                 export COMPOSER_NO_INTERACTION=1
@@ -556,6 +596,11 @@ optimize_backend() {
                 timeout 10s composer config -g repo.packagist composer https://mirrors.aliyun.com/composer/ 2>/dev/null || {
                     log_warning "Composer 镜像源配置超时，跳过"
                 }
+            else
+                log_info "使用 Composer 官方源..."
+                # 确保使用官方源
+                export COMPOSER_NO_INTERACTION=1
+                timeout 10s composer config -g --unset repos.packagist 2>/dev/null || true
             fi
             
             # 获取正确的站点所有者

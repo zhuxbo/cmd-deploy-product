@@ -36,6 +36,39 @@ show_help() {
     echo ""
 }
 
+# 检测服务器是否在中国大陆（简化版）
+is_china_server() {
+    # 方法1: 检测到中国镜像站的延迟
+    local china_hosts=("mirrors.aliyun.com" "mirrors.tencent.com")
+    local low_latency_count=0
+    
+    for host in "${china_hosts[@]}"; do
+        if ping -c 1 -W 1 "$host" >/dev/null 2>&1; then
+            local avg_time=$(ping -c 2 -W 1 "$host" 2>/dev/null | grep "avg" | awk -F'/' '{print $5}')
+            if [ -n "$avg_time" ]; then
+                local avg_ms=${avg_time%.*}
+                # 延迟小于50ms，很可能在中国大陆
+                [ "$avg_ms" -lt 50 ] && low_latency_count=$((low_latency_count + 1))
+            fi
+        fi
+    done
+    
+    # 方法2: 检查云服务商元数据
+    # 阿里云
+    if curl -s -m 1 "http://100.100.100.200/latest/meta-data/region-id" 2>/dev/null | grep -qE "^cn-"; then
+        return 0
+    fi
+    # 腾讯云
+    if curl -s -m 1 "http://metadata.tencentyun.com/latest/meta-data/region" 2>/dev/null | grep -qE "^ap-beijing|^ap-shanghai|^ap-guangzhou"; then
+        return 0
+    fi
+    
+    # 如果至少一个中国镜像站延迟很低，认为在中国
+    [ $low_latency_count -ge 1 ] && return 0
+    
+    return 1
+}
+
 version_compare() {
     local version1="$1"
     local version2="$2"
@@ -113,14 +146,18 @@ detect_system() {
     
     # 确定包管理器和PHP包前缀
     if command -v apt-get &> /dev/null; then
-        # 配置中国镜像源
-        if [ -f /etc/apt/sources.list ] && ! grep -q "mirrors.aliyun.com\|mirrors.tuna" /etc/apt/sources.list; then
-            log_info "配置 APT 中国镜像源..."
-            sudo cp /etc/apt/sources.list /etc/apt/sources.list.bak
-            sudo sed -i 's|http://[a-z][a-z].archive.ubuntu.com|http://mirrors.aliyun.com|g' /etc/apt/sources.list
-            sudo sed -i 's|http://archive.ubuntu.com|http://mirrors.aliyun.com|g' /etc/apt/sources.list
-            sudo sed -i 's|http://security.ubuntu.com|http://mirrors.aliyun.com|g' /etc/apt/sources.list
-            sudo sed -i 's|http://deb.debian.org|http://mirrors.aliyun.com|g' /etc/apt/sources.list
+        # 只有在中国大陆服务器上才配置中国镜像源
+        if is_china_server; then
+            if [ -f /etc/apt/sources.list ] && ! grep -q "mirrors.aliyun.com\|mirrors.tuna" /etc/apt/sources.list; then
+                log_info "检测到中国大陆服务器，配置 APT 中国镜像源..."
+                sudo cp /etc/apt/sources.list /etc/apt/sources.list.bak
+                sudo sed -i 's|http://[a-z][a-z].archive.ubuntu.com|http://mirrors.aliyun.com|g' /etc/apt/sources.list
+                sudo sed -i 's|http://archive.ubuntu.com|http://mirrors.aliyun.com|g' /etc/apt/sources.list
+                sudo sed -i 's|http://security.ubuntu.com|http://mirrors.aliyun.com|g' /etc/apt/sources.list
+                sudo sed -i 's|http://deb.debian.org|http://mirrors.aliyun.com|g' /etc/apt/sources.list
+            fi
+        else
+            log_info "检测到海外服务器，使用默认 APT 源..."
         fi
         PKG_MANAGER="apt"
         PKG_UPDATE="apt-get update"
@@ -129,12 +166,16 @@ detect_system() {
         PHP_PKG_PREFIX="php${PHP_VERSION}"
         SERVICE_NAME="php${PHP_VERSION}-fpm"
     elif command -v yum &> /dev/null; then
-        # 配置中国镜像源
-        if [ -f /etc/yum.repos.d/CentOS-Base.repo ] && ! grep -q "mirrors.aliyun.com\|mirrors.tuna" /etc/yum.repos.d/CentOS-Base.repo; then
-            log_info "配置 YUM 中国镜像源..."
-            sudo cp /etc/yum.repos.d/CentOS-Base.repo /etc/yum.repos.d/CentOS-Base.repo.bak
-            sudo sed -i 's|mirrorlist=|#mirrorlist=|g' /etc/yum.repos.d/CentOS-Base.repo
-            sudo sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://mirrors.aliyun.com|g' /etc/yum.repos.d/CentOS-Base.repo
+        # 只有在中国大陆服务器上才配置中国镜像源
+        if is_china_server; then
+            if [ -f /etc/yum.repos.d/CentOS-Base.repo ] && ! grep -q "mirrors.aliyun.com\|mirrors.tuna" /etc/yum.repos.d/CentOS-Base.repo; then
+                log_info "检测到中国大陆服务器，配置 YUM 中国镜像源..."
+                sudo cp /etc/yum.repos.d/CentOS-Base.repo /etc/yum.repos.d/CentOS-Base.repo.bak
+                sudo sed -i 's|mirrorlist=|#mirrorlist=|g' /etc/yum.repos.d/CentOS-Base.repo
+                sudo sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://mirrors.aliyun.com|g' /etc/yum.repos.d/CentOS-Base.repo
+            fi
+        else
+            log_info "检测到海外服务器，使用默认 YUM 源..."
         fi
         PKG_MANAGER="yum"
         PKG_UPDATE="yum makecache"
@@ -143,12 +184,16 @@ detect_system() {
         PHP_PKG_PREFIX="php"
         SERVICE_NAME="php-fpm"
     elif command -v dnf &> /dev/null; then
-        # 配置中国镜像源
-        if [ -f /etc/yum.repos.d/fedora.repo ] && ! grep -q "mirrors.aliyun.com\|mirrors.tuna" /etc/yum.repos.d/fedora.repo; then
-            log_info "配置 DNF 中国镜像源..."
-            sudo cp /etc/yum.repos.d/fedora.repo /etc/yum.repos.d/fedora.repo.bak
-            sudo sed -i 's|metalink=|#metalink=|g' /etc/yum.repos.d/fedora.repo
-            sudo sed -i 's|#baseurl=http://download.example/pub/fedora/linux|baseurl=https://mirrors.aliyun.com/fedora|g' /etc/yum.repos.d/fedora.repo
+        # 只有在中国大陆服务器上才配置中国镜像源
+        if is_china_server; then
+            if [ -f /etc/yum.repos.d/fedora.repo ] && ! grep -q "mirrors.aliyun.com\|mirrors.tuna" /etc/yum.repos.d/fedora.repo; then
+                log_info "检测到中国大陆服务器，配置 DNF 中国镜像源..."
+                sudo cp /etc/yum.repos.d/fedora.repo /etc/yum.repos.d/fedora.repo.bak
+                sudo sed -i 's|metalink=|#metalink=|g' /etc/yum.repos.d/fedora.repo
+                sudo sed -i 's|#baseurl=http://download.example/pub/fedora/linux|baseurl=https://mirrors.aliyun.com/fedora|g' /etc/yum.repos.d/fedora.repo
+            fi
+        else
+            log_info "检测到海外服务器，使用默认 DNF 源..."
         fi
         PKG_MANAGER="dnf"
         PKG_UPDATE="dnf makecache"
@@ -581,11 +626,20 @@ install_jdk17() {
                 ;;
         esac
         
-        # 下载 OpenJDK 17 (使用清华大学镜像)
-        local jdk_url="https://mirrors.tuna.tsinghua.edu.cn/Adoptium/17/jdk/x64/linux/OpenJDK17U-jdk_${jdk_arch}_linux_hotspot_17.0.9_9.tar.gz"
+        # 根据地理位置选择下载源
         local jdk_file="/tmp/openjdk-17.tar.gz"
+        local jdk_url=""
         
-        log_info "从清华镜像下载 OpenJDK 17..."
+        if is_china_server; then
+            # 中国大陆使用清华镜像
+            jdk_url="https://mirrors.tuna.tsinghua.edu.cn/Adoptium/17/jdk/x64/linux/OpenJDK17U-jdk_${jdk_arch}_linux_hotspot_17.0.9_9.tar.gz"
+            log_info "从清华镜像下载 OpenJDK 17..."
+        else
+            # 海外使用官方源
+            jdk_url="https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.9%2B9/OpenJDK17U-jdk_${jdk_arch}_linux_hotspot_17.0.9_9.tar.gz"
+            log_info "从官方源下载 OpenJDK 17..."
+        fi
+        
         if curl -L -o "$jdk_file" "$jdk_url" >/dev/null 2>&1 || wget -O "$jdk_file" "$jdk_url" >/dev/null 2>&1; then
             # 解压到 /opt/java
             sudo mkdir -p /opt/java
@@ -754,10 +808,16 @@ update_composer_robust() {
     # 尝试创建缓存目录
     mkdir -p "$COMPOSER_CACHE_DIR" 2>/dev/null || true
     
-    # 先配置中国镜像源以加速下载
-    log_info "配置 Composer 使用中国镜像源..."
-    composer config -g repo.packagist composer https://mirrors.aliyun.com/composer/ 2>/dev/null || true
-    # 设置 GitHub 镜像
+    # 根据地理位置配置镜像源
+    if is_china_server; then
+        log_info "配置 Composer 中国镜像源..."
+        composer config -g repo.packagist composer https://mirrors.aliyun.com/composer/ 2>/dev/null || true
+    else
+        log_info "使用 Composer 官方源..."
+        # 确保使用官方源（移除可能存在的中国镜像配置）
+        composer config -g --unset repos.packagist 2>/dev/null || true
+    fi
+    # 设置 GitHub 协议
     composer config -g github-protocols https 2>/dev/null || true
     
     # 清理可能的缓存问题
@@ -788,8 +848,16 @@ update_composer_robust() {
     log_info "尝试使用阿里云镜像快速更新..."
     local fast_update_success=false
     
-    # 先尝试从阿里云直接下载最新版本
-    if timeout 60s curl -sL https://mirrors.aliyun.com/composer/composer.phar -o /tmp/composer_new.phar 2>/dev/null; then
+    # 根据地理位置选择下载源
+    local download_url=""
+    if is_china_server; then
+        download_url="https://mirrors.aliyun.com/composer/composer.phar"
+    else
+        download_url="https://getcomposer.org/download/latest-stable/composer.phar"
+    fi
+    
+    # 尝试下载最新版本
+    if timeout 60s curl -sL "$download_url" -o /tmp/composer_new.phar 2>/dev/null; then
         if $PHP_CMD /tmp/composer_new.phar --version >/dev/null 2>&1; then
             local new_version=$($PHP_CMD /tmp/composer_new.phar --version 2>&1 | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' | head -1)
             log_info "从阿里云下载的版本: $new_version"
@@ -845,13 +913,24 @@ reinstall_composer() {
     rm -f composer-setup.php composer.phar
     
     # 尝试使用国内镜像下载最新版（优先级：速度最快的在前）
-    local installer_urls=(
-        "https://mirrors.aliyun.com/composer/composer.phar"
-        "https://mirrors.cloud.tencent.com/composer/composer.phar"
-        "https://install.phpcomposer.com/installer"
-        "https://mirrors.huaweicloud.com/composer/composer.phar"
-        "https://getcomposer.org/installer"
-    )
+    # 根据地理位置选择下载源
+    local installer_urls=()
+    
+    if is_china_server; then
+        # 中国大陆优先使用国内镜像
+        installer_urls=(
+            "https://mirrors.aliyun.com/composer/composer.phar"
+            "https://mirrors.cloud.tencent.com/composer/composer.phar"
+            "https://install.phpcomposer.com/installer"
+            "https://getcomposer.org/installer"
+        )
+    else
+        # 海外优先使用官方源
+        installer_urls=(
+            "https://getcomposer.org/installer"
+            "https://github.com/composer/composer/releases/latest/download/composer.phar"
+        )
+    fi
     
     local download_success=false
     
@@ -909,15 +988,19 @@ reinstall_composer() {
     fi
     
     # 配置中国镜像源（优先阿里云）
-    log_info "配置 Composer 中国镜像源..."
-    # 主镜像源（阿里云）
-    composer config -g repo.packagist composer https://mirrors.aliyun.com/composer/ 2>/dev/null || true
+    # 根据地理位置配置镜像源
+    if is_china_server; then
+        log_info "配置 Composer 中国镜像源..."
+        composer config -g repo.packagist composer https://mirrors.aliyun.com/composer/ 2>/dev/null || true
+        log_info "如需切换镜像源，可使用: composer config -g repo.packagist composer https://mirrors.cloud.tencent.com/composer/"
+    else
+        log_info "使用 Composer 官方源..."
+        composer config -g --unset repos.packagist 2>/dev/null || true
+    fi
     # 其他优化配置
     composer config -g github-protocols https 2>/dev/null || true
     composer config -g process-timeout 300 2>/dev/null || true
     composer config -g use-parent-dir true 2>/dev/null || true
-    # 如果阿里云不可用，可以手动切换到腾讯云镜像
-    log_info "如需切换镜像源，可使用: composer config -g repo.packagist composer https://mirrors.cloud.tencent.com/composer/"
     
     # 验证安装
     local final_version=$(timeout -k 3s 10s composer --version 2>&1 | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' | head -1)
