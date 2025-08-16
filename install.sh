@@ -3,6 +3,8 @@
 # 证书管理系统生产环境安装脚本
 # 功能：从 production-code 仓库安装系统
 
+# 注意：使用了 set -e，任何返回非零的命令都会导致脚本退出
+# 当前脚本中的函数都正常返回 0，pull_production_code 中的 exit 1 会终止脚本
 set -e
 
 # 颜色定义
