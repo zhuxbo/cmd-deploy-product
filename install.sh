@@ -28,7 +28,8 @@ SOURCE_DIR="$SCRIPT_DIR/source"
 BACKUP_DIR="$SITE_ROOT/backup/install"
 
 # 生产代码仓库（使用HTTPS地址，避免SSH密钥问题）
-PRODUCTION_REPO="https://gitee.com/zhuxbo/production-code.git"
+PRODUCTION_REPO_GITEE="https://gitee.com/zhuxbo/production-code.git"
+PRODUCTION_REPO_GITHUB="https://github.com/zhuxbo/production-code.git"
 
 # 检测宝塔面板
 check_bt_panel() {
@@ -53,10 +54,50 @@ pull_production_code() {
     
     if [ -d "production-code" ]; then
         cd production-code
-        git fetch origin >/dev/null 2>&1
+        # 尝试从当前 origin 拉取
+        if ! git fetch origin >/dev/null 2>&1; then
+            log_warning "从当前仓库拉取失败，尝试切换仓库..."
+            # 获取当前 origin URL
+            local current_url=$(git remote get-url origin 2>/dev/null || echo "")
+            
+            # 尝试切换到备用仓库
+            if [[ "$current_url" == *"gitee.com"* ]]; then
+                log_info "切换到 GitHub 仓库..."
+                git remote set-url origin "$PRODUCTION_REPO_GITHUB"
+            else
+                log_info "切换到 Gitee 仓库..."
+                git remote set-url origin "$PRODUCTION_REPO_GITEE"
+            fi
+            
+            # 再次尝试拉取
+            if ! git fetch origin >/dev/null 2>&1; then
+                log_error "无法从任何仓库拉取代码"
+                exit 1
+            fi
+        fi
         git reset --hard origin/main >/dev/null 2>&1
     else
-        git clone "$PRODUCTION_REPO" production-code >/dev/null 2>&1
+        # 首次克隆，根据地理位置选择仓库
+        local clone_success=false
+        
+        # 优先尝试 Gitee（国内通常更快）
+        log_info "尝试从 Gitee 克隆..."
+        if git clone "$PRODUCTION_REPO_GITEE" production-code >/dev/null 2>&1; then
+            clone_success=true
+            log_success "从 Gitee 克隆成功"
+        else
+            log_warning "Gitee 克隆失败，尝试 GitHub..."
+            if git clone "$PRODUCTION_REPO_GITHUB" production-code >/dev/null 2>&1; then
+                clone_success=true
+                log_success "从 GitHub 克隆成功"
+            fi
+        fi
+        
+        if [ "$clone_success" = false ]; then
+            log_error "无法从任何仓库克隆代码"
+            exit 1
+        fi
+        
         cd production-code
     fi
     
