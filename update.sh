@@ -168,15 +168,39 @@ check_dependencies() {
                 if [ -f /etc/apt/sources.list ] && ! grep -q "mirrors.aliyun.com\|mirrors.tuna" /etc/apt/sources.list; then
                     log_info "检测到中国大陆服务器，配置 APT 中国镜像源..."
                     sudo cp /etc/apt/sources.list /etc/apt/sources.list.bak
+                    # Ubuntu 镜像源配置
                     sudo sed -i 's|http://[a-z][a-z].archive.ubuntu.com|http://mirrors.aliyun.com|g' /etc/apt/sources.list
                     sudo sed -i 's|http://archive.ubuntu.com|http://mirrors.aliyun.com|g' /etc/apt/sources.list
                     sudo sed -i 's|http://security.ubuntu.com|http://mirrors.aliyun.com|g' /etc/apt/sources.list
-                    sudo sed -i 's|http://deb.debian.org|http://mirrors.aliyun.com|g' /etc/apt/sources.list
+                    # Debian 镜像源配置（更完整的处理）
+                    sudo sed -i 's|http://deb.debian.org/debian|http://mirrors.aliyun.com/debian|g' /etc/apt/sources.list
+                    sudo sed -i 's|http://security.debian.org/debian-security|http://mirrors.aliyun.com/debian-security|g' /etc/apt/sources.list
+                    sudo sed -i 's|http://security.debian.org|http://mirrors.aliyun.com/debian-security|g' /etc/apt/sources.list
+                    # 处理 HTTPS 源
+                    sudo sed -i 's|https://deb.debian.org/debian|http://mirrors.aliyun.com/debian|g' /etc/apt/sources.list
+                    sudo sed -i 's|https://security.debian.org/debian-security|http://mirrors.aliyun.com/debian-security|g' /etc/apt/sources.list
                 fi
             fi
             log_info "检测到 Ubuntu/Debian 系统，使用 apt 安装 jq..."
-            if sudo apt-get update >/dev/null 2>&1 && sudo apt-get install -y jq >/dev/null 2>&1; then
+            # 先尝试更新包列表，如果失败则显示错误信息
+            if ! sudo apt-get update 2>/dev/null; then
+                log_warning "apt-get update 失败，尝试使用现有包列表安装 jq..."
+            fi
+            # 尝试安装 jq，显示更详细的错误信息
+            if sudo apt-get install -y jq 2>/dev/null; then
                 install_success=true
+            else
+                log_warning "使用 apt-get 安装 jq 失败，可能的原因："
+                log_warning "  1. 网络连接问题"
+                log_warning "  2. 软件源配置问题"
+                log_warning "  3. 权限问题"
+                # 尝试使用 apt 而不是 apt-get
+                if command -v apt >/dev/null 2>&1; then
+                    log_info "尝试使用 apt 命令安装..."
+                    if sudo apt install -y jq 2>/dev/null; then
+                        install_success=true
+                    fi
+                fi
             fi
         # CentOS/RHEL/Fedora 系统
         elif command -v yum >/dev/null 2>&1; then
