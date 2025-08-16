@@ -387,7 +387,8 @@ main() {
     # 询问是否执行依赖安装
     echo
     echo -n "是否需要检查并安装运行环境依赖？(y/n): "
-    read -n 1 -r confirm
+    # 优先从控制终端读取（兼容 sudo 调用），如果失败则从标准输入读取
+    { read -n 1 -r confirm < /dev/tty 2>/dev/null || read -n 1 -r confirm; } || confirm="n"
     echo
     if [[ $confirm =~ ^[Yy]$ ]]; then
         # 智能选择依赖安装脚本
