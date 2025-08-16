@@ -164,7 +164,8 @@ select_bt_php_version() {
         echo
         
         while true; do
-            read -p "请选择要使用的 PHP 版本 (1-${#BT_PHP_VERSIONS[@]}): " -r choice
+            echo -n "请选择要使用的 PHP 版本 (1-${#BT_PHP_VERSIONS[@]}): "
+            read -r choice < /dev/tty 2>/dev/null || read -r choice
             if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le ${#BT_PHP_VERSIONS[@]} ]; then
                 PHP_VERSION="${BT_PHP_VERSIONS[$((choice-1))]}"
                 PHP_CMD="/www/server/php/$PHP_VERSION/bin/php"
