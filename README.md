@@ -226,6 +226,7 @@ site-root/               # 站点根目录
 │   ├── update.sh        # 更新脚本
 │   ├── keeper.sh        # 备份脚本
 │   ├── setup-queue.sh   # 设置定时任务和队列脚本
+│   ├── detect-china-ip.sh # 检测中国大陆IP脚本
 │   └── update-config.json # 更新配置
 ├── backup/              # 备份目录
 │   ├── install/         # install.sh 的备份
