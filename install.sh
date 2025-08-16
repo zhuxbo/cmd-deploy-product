@@ -386,9 +386,10 @@ main() {
     
     # 询问是否执行依赖安装
     echo
-    read -p "是否需要检查并安装运行环境依赖？(y/n): " -n 1 -r || true
+    echo -n "是否需要检查并安装运行环境依赖？(y/n): "
+    read -n 1 -r confirm
     echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
+    if [[ $confirm =~ ^[Yy]$ ]]; then
         # 智能选择依赖安装脚本
         if check_bt_panel; then
             # 宝塔环境，使用宝塔专用脚本
