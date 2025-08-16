@@ -243,8 +243,8 @@ check_php_extensions() {
     local required_extensions=(
         "bcmath" "ctype" "curl" "xml" "zip" "dom"
         "gd" "iconv" "intl" "json" "openssl"
-        "pcntl" "pcre" "pdo" "pdo_mysql" "redis" "tokenizer"
-        "fileinfo" "mbstring" "mbstring" "calendar"
+        "pcntl" "pcre" "pdo" "pdo_mysql" "tokenizer"
+        "fileinfo" "redis" "mbstring" "calendar"
     )
     
     local cli_missing=()
