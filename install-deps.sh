@@ -302,10 +302,10 @@ check_php_extensions() {
     log_info "检测 PHP 扩展..."
     
     local required_extensions=(
-        "bcmath" "calendar" "ctype" "curl" "dom" "fileinfo"
-        "gd" "iconv" "intl" "json" "mbstring" "openssl"
+        "bcmath" "ctype" "curl" "xml" "zip" "dom"
+        "gd" "iconv" "intl" "json" "openssl"
         "pcntl" "pcre" "pdo" "pdo_mysql" "redis" "tokenizer" 
-        "xml" "zip"
+        "fileinfo" "mbstring" "mbstring" "calendar"
     )
     
     local missing_extensions=()

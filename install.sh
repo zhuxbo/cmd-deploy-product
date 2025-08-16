@@ -428,7 +428,7 @@ main() {
         log_warning "   脚本内容 cd $SITE_ROOT/backend && php artisan schedule:run"
         log_warning "2. 队列守护进程："
         log_warning "   启动用户 www"
-        log_warning "   启动命令 php artisan queue:work --queue Task"
+        log_warning "   启动命令 php artisan queue:work --queue Task --tries 3 --delay 5 --max-jobs 1000 --max-time 3600 --memory 128 --timeout 60 --sleep 3"
         log_warning "   进程目录 $SITE_ROOT/backend"
         log_warning "================================="
     fi
