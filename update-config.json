@@ -3,7 +3,8 @@
     "backend": [
       ".env",
       "storage/app/public",
-      "storage/logs"
+      "storage/logs",
+      "storage/pay"
     ],
     "frontend": {
       "admin": [
