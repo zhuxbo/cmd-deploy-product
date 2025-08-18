@@ -369,6 +369,11 @@ npm config set registry https://registry.npmmirror.com
 
 ## 最近更新
 
+- **2025-08-18**: 添加仓库源选择功能
+  - install.sh 和 update.sh 添加 `--gitee` 和 `--github` 参数支持
+  - 允许用户强制指定从特定仓库（Gitee 或 GitHub）拉取代码
+  - 未指定时保持原有的自动切换逻辑（优先 Gitee，失败时自动切换到 GitHub）
+  - 强制指定仓库时，如果指定仓库失败则直接报错，不会自动切换
 - **2025-08-15**: 修复关键问题和优化
   - 修复 `set -e` 导致 Composer 升级不执行的问题
   - 修复海外腾讯云（如新加坡）被误判为中国服务器的问题  

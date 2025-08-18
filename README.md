@@ -32,7 +32,9 @@
 **使用方法：**
 
 ```bash
-./install.sh
+./install.sh                # 自动选择最优仓库
+./install.sh --gitee        # 强制从 Gitee 拉取代码
+./install.sh --github       # 强制从 GitHub 拉取代码
 ```
 
 **后续步骤：**
@@ -126,12 +128,17 @@ sudo ./install-deps-bt.sh -d
 
 ```bash
 # 更新操作
-./update.sh                      # 更新所有模块
+./update.sh                      # 更新所有模块（自动选择最优仓库）
 ./update.sh update api            # 仅更新后端
 ./update.sh update admin          # 仅更新管理端
 ./update.sh update user           # 仅更新用户端
 ./update.sh update easy           # 仅更新简易端
 ./update.sh update nginx          # 仅更新Nginx配置
+
+# 指定仓库源
+./update.sh --gitee              # 强制从 Gitee 拉取代码
+./update.sh --github             # 强制从 GitHub 拉取代码
+./update.sh --gitee update api   # 从 Gitee 更新后端
 
 # 备份管理
 ./update.sh list                  # 列出所有备份

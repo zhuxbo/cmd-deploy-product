@@ -77,6 +77,21 @@ CONFIG_FILE="$SCRIPT_DIR/update-config.json"
 PRODUCTION_REPO_GITEE="https://gitee.com/zhuxbo/production-code.git"
 PRODUCTION_REPO_GITHUB="https://github.com/zhuxbo/production-code.git"
 
+# 解析命令行参数
+FORCE_REPO=""
+for arg in "$@"; do
+    case $arg in
+        --gitee)
+            FORCE_REPO="gitee"
+            log_info "强制使用 Gitee 仓库"
+            ;;
+        --github)
+            FORCE_REPO="github"
+            log_info "强制使用 GitHub 仓库"
+            ;;
+    esac
+done
+
 # 临时保留目录
 TEMP_PRESERVE_DIR=""
 
@@ -315,8 +330,25 @@ pull_latest_code() {
     if [ -d "production-code" ]; then
         cd production-code
         
+        # 如果指定了强制仓库，先切换到指定仓库
+        if [ -n "$FORCE_REPO" ]; then
+            if [ "$FORCE_REPO" = "gitee" ]; then
+                log_info "切换到 Gitee 仓库..."
+                git remote set-url origin "$PRODUCTION_REPO_GITEE"
+            elif [ "$FORCE_REPO" = "github" ]; then
+                log_info "切换到 GitHub 仓库..."
+                git remote set-url origin "$PRODUCTION_REPO_GITHUB"
+            fi
+        fi
+        
         # 尝试从当前 origin 拉取
         if ! git fetch origin 2>/dev/null; then
+            if [ -n "$FORCE_REPO" ]; then
+                # 如果指定了强制仓库但失败，直接报错
+                log_error "无法从指定的 $FORCE_REPO 仓库拉取代码"
+                exit 1
+            fi
+            
             log_warning "从当前仓库拉取失败，尝试切换仓库..."
             # 获取当前 origin URL
             local current_url=$(git remote get-url origin 2>/dev/null || echo "")
@@ -358,25 +390,49 @@ pull_latest_code() {
         
         git reset --hard origin/main
     else
-        # 首次克隆，尝试多个仓库
+        # 首次克隆
         local clone_success=false
         
-        # 优先尝试 Gitee（国内通常更快）
-        log_info "尝试从 Gitee 克隆..."
-        if git clone "$PRODUCTION_REPO_GITEE" production-code 2>/dev/null; then
-            clone_success=true
-            log_success "从 Gitee 克隆成功"
-        else
-            log_warning "Gitee 克隆失败，尝试 GitHub..."
-            if git clone "$PRODUCTION_REPO_GITHUB" production-code 2>/dev/null; then
-                clone_success=true
-                log_success "从 GitHub 克隆成功"
+        if [ -n "$FORCE_REPO" ]; then
+            # 如果指定了强制仓库，只尝试指定的仓库
+            if [ "$FORCE_REPO" = "gitee" ]; then
+                log_info "从 Gitee 克隆..."
+                if git clone "$PRODUCTION_REPO_GITEE" production-code 2>/dev/null; then
+                    clone_success=true
+                    log_success "从 Gitee 克隆成功"
+                else
+                    log_error "无法从 Gitee 克隆代码"
+                    exit 1
+                fi
+            elif [ "$FORCE_REPO" = "github" ]; then
+                log_info "从 GitHub 克隆..."
+                if git clone "$PRODUCTION_REPO_GITHUB" production-code 2>/dev/null; then
+                    clone_success=true
+                    log_success "从 GitHub 克隆成功"
+                else
+                    log_error "无法从 GitHub 克隆代码"
+                    exit 1
+                fi
             fi
-        fi
-        
-        if [ "$clone_success" = false ]; then
-            log_error "无法从任何仓库克隆代码"
-            exit 1
+        else
+            # 未指定强制仓库，按原逻辑尝试
+            # 优先尝试 Gitee（国内通常更快）
+            log_info "尝试从 Gitee 克隆..."
+            if git clone "$PRODUCTION_REPO_GITEE" production-code 2>/dev/null; then
+                clone_success=true
+                log_success "从 Gitee 克隆成功"
+            else
+                log_warning "Gitee 克隆失败，尝试 GitHub..."
+                if git clone "$PRODUCTION_REPO_GITHUB" production-code 2>/dev/null; then
+                    clone_success=true
+                    log_success "从 GitHub 克隆成功"
+                fi
+            fi
+            
+            if [ "$clone_success" = false ]; then
+                log_error "无法从任何仓库克隆代码"
+                exit 1
+            fi
         fi
         
         cd production-code
