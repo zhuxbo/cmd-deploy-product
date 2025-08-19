@@ -29,31 +29,46 @@ run_package_install() {
     
     # 判断包管理器类型
     if [[ "$cmd" == *"apt-get"* ]] || [[ "$cmd" == *"apt "* ]]; then
-        # Debian/Ubuntu 系列
+        # Debian/Ubuntu 系列 - 使用更高效的过滤
         export DEBIAN_FRONTEND=noninteractive
-        eval "sudo $cmd" 2>&1 | while IFS= read -r line; do
-            if [[ "$line" == *"Unpacking"* ]] || \
-               [[ "$line" == *"Setting up"* ]] || \
-               [[ "$line" == *"Processing"* ]] || \
-               [[ "$line" == *"Error"* ]] || \
-               [[ "$line" == *"Warning"* ]]; then
-                echo "  进度: ${line:0:70}..."
-            fi
-        done
+        eval "sudo $cmd" 2>&1 | \
+            stdbuf -oL grep -E "(Unpacking|Setting up|Processing|Error|Warning|dpkg:|E:)" | \
+            head -n 20 | \
+            while IFS= read -r line; do
+                if [[ "$line" == *"Processing triggers"* ]]; then
+                    echo "  完成: 处理触发器..."
+                elif [[ "$line" == *"Setting up"* ]]; then
+                    local pkg=$(echo "$line" | sed 's/.*Setting up //;s/ .*//')
+                    echo "  配置: $pkg"
+                elif [[ "$line" == *"Unpacking"* ]]; then
+                    local pkg=$(echo "$line" | sed 's/.*Unpacking //;s/ .*//')
+                    echo "  解压: $pkg"
+                elif [[ "$line" == *"Error"* ]] || [[ "$line" == *"E:"* ]]; then
+                    echo "  错误: $line"
+                elif [[ "$line" == *"Warning"* ]]; then
+                    echo "  警告: ${line:0:60}..."
+                fi
+            done
         local result=${PIPESTATUS[0]}
         unset DEBIAN_FRONTEND
         return $result
     elif [[ "$cmd" == *"yum"* ]] || [[ "$cmd" == *"dnf"* ]]; then
-        # RedHat 系列
-        eval "sudo $cmd" 2>&1 | grep -E "(Installing|Installed|Complete|Error|Warning)" | tail -n 5
+        # RedHat 系列 - 只显示关键信息
+        eval "sudo $cmd" 2>&1 | \
+            stdbuf -oL grep -E "(Installing|Installed|Complete|Error|Warning)" | \
+            head -n 10
         return ${PIPESTATUS[0]}
     elif [[ "$cmd" == *"zypper"* ]]; then
         # openSUSE
-        eval "sudo $cmd" 2>&1 | grep -E "(Installing|Installed|Done|Error|Warning)" | tail -n 5
+        eval "sudo $cmd" 2>&1 | \
+            stdbuf -oL grep -E "(Installing|Installed|Done|Error|Warning)" | \
+            head -n 10
         return ${PIPESTATUS[0]}
     elif [[ "$cmd" == *"pacman"* ]]; then
         # Arch Linux
-        eval "sudo $cmd" 2>&1 | grep -E "(installing|installed|error|warning)" | tail -n 5
+        eval "sudo $cmd" 2>&1 | \
+            stdbuf -oL grep -E "(installing|installed|error|warning)" | \
+            head -n 10
         return ${PIPESTATUS[0]}
     else
         # 其他情况，直接执行

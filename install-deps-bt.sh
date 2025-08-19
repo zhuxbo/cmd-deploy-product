@@ -672,37 +672,38 @@ install_jdk17() {
         # 安装 JDK（显示实时进度）
         log_info "正在安装 OpenJDK 17（请耐心等待）..."
         
-        # 创建临时文件存储输出
-        local temp_log="/tmp/jdk_install_$$.log"
-        
-        # 后台运行安装命令，同时显示最后5行输出
+        # 使用更高效的过滤方式
         (
             sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
                 --no-install-recommends \
                 -o Dpkg::Options::="--force-confdef" \
                 -o Dpkg::Options::="--force-confold" \
-                openjdk-17-jdk 2>&1 | while IFS= read -r line; do
-                echo "$line" >> "$temp_log"
-                # 每隔一段时间显示最新状态
-                if [[ "$line" == *"Unpacking"* ]] || \
-                   [[ "$line" == *"Setting up"* ]] || \
-                   [[ "$line" == *"Processing"* ]]; then
-                    echo "  进度: $line" | cut -c 1-80
+                openjdk-17-jdk 2>&1 | \
+            stdbuf -oL grep -E "(Unpacking|Setting up|Processing|Error|Warning|^Get:|^Fetched|openjdk)" | \
+            while IFS= read -r line; do
+                # 只显示关键信息
+                if [[ "$line" == *"Get:"* ]] || [[ "$line" == *"Fetched"* ]]; then
+                    # 跳过下载信息
+                    continue
+                elif [[ "$line" == *"Processing triggers"* ]]; then
+                    echo "  完成: 处理触发器..."
+                elif [[ "$line" == *"Setting up openjdk"* ]]; then
+                    echo "  配置: ${line##*Setting up }" | cut -c 1-60
+                elif [[ "$line" == *"Unpacking openjdk"* ]]; then
+                    echo "  解压: ${line##*Unpacking }" | cut -c 1-60
+                elif [[ "$line" == *"Error"* ]] || [[ "$line" == *"Warning"* ]]; then
+                    echo "  $line"
                 fi
             done
         )
-        local apt_result=$?
+        local apt_result=${PIPESTATUS[0]}
         
         # 检查安装结果
-        if [ $apt_result -eq 0 ] || grep -q "Setting up openjdk-17-jdk" "$temp_log" 2>/dev/null; then
+        if [ $apt_result -eq 0 ]; then
             install_success=true
             log_success "OpenJDK 17 安装完成"
         else
-            # 显示错误信息
-            if [ -f "$temp_log" ]; then
-                log_warning "安装可能失败，最后几行日志："
-                tail -n 10 "$temp_log" | sed 's/^/  /'
-            fi
+            log_warning "安装命令返回错误代码: $apt_result"
             
             # 尝试添加PPA仓库
             log_info "尝试添加 OpenJDK PPA 仓库..."
@@ -720,8 +721,6 @@ install_jdk17() {
             fi
         fi
         
-        # 清理临时文件
-        rm -f "$temp_log"
         
         # 恢复环境变量
         unset DEBIAN_FRONTEND
