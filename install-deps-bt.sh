@@ -784,14 +784,25 @@ install_jdk17() {
     # openSUSE 系统
     elif command -v zypper >/dev/null 2>&1; then
         log_info "使用 zypper 安装 OpenJDK 17..."
-        if sudo zypper install -y java-17-openjdk java-17-openjdk-devel >/dev/null 2>&1; then
+        log_info "正在安装 OpenJDK 17（请耐心等待）..."
+        
+        if sudo zypper install -y java-17-openjdk java-17-openjdk-devel 2>&1 | \
+            grep -E "(Installing|Installed|Complete|Error)" | tail -n 5; then
             install_success=true
+            log_success "OpenJDK 17 安装完成"
         fi
     # Arch Linux
     elif command -v pacman >/dev/null 2>&1; then
         log_info "使用 pacman 安装 OpenJDK 17..."
-        if sudo pacman -Sy --noconfirm jdk17-openjdk >/dev/null 2>&1; then
+        log_info "正在安装 OpenJDK 17（请耐心等待）..."
+        
+        # 先更新包数据库
+        sudo pacman -Sy 2>&1 | tail -n 3
+        
+        if sudo pacman -S --noconfirm jdk17-openjdk 2>&1 | \
+            grep -E "(installing|installed|error)" | tail -n 5; then
             install_success=true
+            log_success "OpenJDK 17 安装完成"
         fi
     fi
     

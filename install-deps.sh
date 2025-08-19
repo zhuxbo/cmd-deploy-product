@@ -18,6 +18,50 @@ log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 log_warning() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 
+# 通用包安装函数（带进度显示）
+run_package_install() {
+    local cmd="$1"
+    local desc="$2"
+    
+    if [ -n "$desc" ]; then
+        log_info "$desc"
+    fi
+    
+    # 判断包管理器类型
+    if [[ "$cmd" == *"apt-get"* ]] || [[ "$cmd" == *"apt "* ]]; then
+        # Debian/Ubuntu 系列
+        export DEBIAN_FRONTEND=noninteractive
+        eval "sudo $cmd" 2>&1 | while IFS= read -r line; do
+            if [[ "$line" == *"Unpacking"* ]] || \
+               [[ "$line" == *"Setting up"* ]] || \
+               [[ "$line" == *"Processing"* ]] || \
+               [[ "$line" == *"Error"* ]] || \
+               [[ "$line" == *"Warning"* ]]; then
+                echo "  进度: ${line:0:70}..."
+            fi
+        done
+        local result=${PIPESTATUS[0]}
+        unset DEBIAN_FRONTEND
+        return $result
+    elif [[ "$cmd" == *"yum"* ]] || [[ "$cmd" == *"dnf"* ]]; then
+        # RedHat 系列
+        eval "sudo $cmd" 2>&1 | grep -E "(Installing|Installed|Complete|Error|Warning)" | tail -n 5
+        return ${PIPESTATUS[0]}
+    elif [[ "$cmd" == *"zypper"* ]]; then
+        # openSUSE
+        eval "sudo $cmd" 2>&1 | grep -E "(Installing|Installed|Done|Error|Warning)" | tail -n 5
+        return ${PIPESTATUS[0]}
+    elif [[ "$cmd" == *"pacman"* ]]; then
+        # Arch Linux
+        eval "sudo $cmd" 2>&1 | grep -E "(installing|installed|error|warning)" | tail -n 5
+        return ${PIPESTATUS[0]}
+    else
+        # 其他情况，直接执行
+        eval "sudo $cmd"
+        return $?
+    fi
+}
+
 # 显示帮助信息
 show_help() {
     echo "证书管理系统依赖安装脚本（标准Linux环境）"
@@ -334,7 +378,7 @@ install_php_ubuntu() {
     
     # 添加 PHP PPA
     sudo $PKG_UPDATE
-    sudo $PKG_INSTALL software-properties-common ca-certificates lsb-release
+    run_package_install "$PKG_INSTALL software-properties-common ca-certificates lsb-release" "安装基础工具..."
     
     # 添加 Ondrej PHP 仓库
     if ! grep -q "ondrej/php" /etc/apt/sources.list.d/*.list 2>/dev/null; then
@@ -349,7 +393,7 @@ install_php_ubuntu() {
     sudo $PKG_UPDATE
     
     # 安装 PHP 8.3 和扩展
-    sudo $PKG_INSTALL \
+    run_package_install "$PKG_INSTALL \
         ${PHP_PKG_PREFIX}-cli \
         ${PHP_PKG_PREFIX}-fpm \
         ${PHP_PKG_PREFIX}-bcmath \
@@ -366,7 +410,7 @@ install_php_ubuntu() {
         ${PHP_PKG_PREFIX}-redis \
         ${PHP_PKG_PREFIX}-xml \
         ${PHP_PKG_PREFIX}-zip \
-        ${PHP_PKG_PREFIX}-opcache
+        ${PHP_PKG_PREFIX}-opcache" "正在安装 PHP 8.3 和扩展（请耐心等待）..."
     
     # 启用 PHP-FPM
     sudo systemctl enable $SERVICE_NAME
@@ -382,22 +426,22 @@ install_php_centos() {
     OS_VERSION=$(echo $VER | cut -d. -f1)
     
     # 安装 EPEL
-    sudo $PKG_INSTALL epel-release
+    run_package_install "$PKG_INSTALL epel-release" "安装 EPEL 仓库..."
     
     # 根据系统版本选择合适的仓库
     if [ "$OS_VERSION" -eq 7 ]; then
         # CentOS 7
-        sudo $PKG_INSTALL https://rpms.remirepo.net/enterprise/remi-release-7.rpm || true
+        run_package_install "$PKG_INSTALL https://rpms.remirepo.net/enterprise/remi-release-7.rpm" "安装 Remi 仓库..." || true
         sudo yum-config-manager --enable remi-php83 || true
     elif [ "$OS_VERSION" -eq 8 ] || [ "$OS_VERSION" -eq 9 ]; then
         # CentOS/Rocky/AlmaLinux 8/9
-        sudo $PKG_INSTALL https://rpms.remirepo.net/enterprise/remi-release-${OS_VERSION}.rpm || true
+        run_package_install "$PKG_INSTALL https://rpms.remirepo.net/enterprise/remi-release-${OS_VERSION}.rpm" "安装 Remi 仓库..." || true
         sudo dnf module reset php -y || true
         sudo dnf module enable php:remi-8.3 -y || true
     fi
     
     # 安装 PHP 8.3 和扩展
-    sudo $PKG_INSTALL \
+    run_package_install "$PKG_INSTALL \
         php \
         php-cli \
         php-fpm \
@@ -417,7 +461,7 @@ install_php_centos() {
         php-pecl-redis \
         php-process \
         php-xml \
-        php-zip
+        php-zip" "正在安装 PHP 8.3 和扩展（请耐心等待）..."
     
     # 启用 PHP-FPM
     sudo systemctl enable php-fpm
@@ -434,7 +478,7 @@ install_php_fedora() {
     sudo $PKG_UPDATE
     
     # 安装 PHP 8.3 和扩展
-    sudo $PKG_INSTALL \
+    run_package_install "$PKG_INSTALL \
         php \
         php-cli \
         php-fpm \
@@ -454,7 +498,7 @@ install_php_fedora() {
         php-pecl-redis \
         php-process \
         php-xml \
-        php-zip
+        php-zip" "正在安装 PHP 8.3 和扩展（请耐心等待）..."
     
     # 启用 PHP-FPM
     sudo systemctl enable php-fpm
@@ -470,7 +514,7 @@ install_php_suse() {
     sudo $PKG_UPDATE
     
     # 安装 PHP 8 和扩展
-    sudo $PKG_INSTALL \
+    run_package_install "$PKG_INSTALL \
         php8 \
         php8-cli \
         php8-fpm \
@@ -487,7 +531,7 @@ install_php_suse() {
         php8-pcntl \
         php8-redis \
         php8-xml \
-        php8-zip
+        php8-zip" "正在安装 PHP 8 和扩展（请耐心等待）..."
     
     # 启用 PHP-FPM
     sudo systemctl enable php-fpm
@@ -571,41 +615,54 @@ install_jdk17() {
     case "$PKG_MANAGER" in
         apt)
             log_info "使用 apt 安装 OpenJDK 17..."
-            if sudo $PKG_UPDATE >/dev/null 2>&1 && sudo $PKG_INSTALL openjdk-17-jdk >/dev/null 2>&1; then
+            
+            # 设置非交互模式
+            export DEBIAN_FRONTEND=noninteractive
+            export NEEDRESTART_MODE=a
+            
+            # 更新包列表
+            log_info "更新软件包列表..."
+            sudo $PKG_UPDATE 2>&1 | tail -n 3
+            
+            # 安装 JDK
+            if run_package_install "$PKG_INSTALL --no-install-recommends openjdk-17-jdk" "正在安装 OpenJDK 17（请耐心等待）..."; then
                 install_success=true
             else
                 # 尝试添加PPA仓库
                 log_info "尝试添加 OpenJDK PPA 仓库..."
-                sudo add-apt-repository -y ppa:openjdk-r/ppa >/dev/null 2>&1
-                sudo $PKG_UPDATE >/dev/null 2>&1
-                if sudo $PKG_INSTALL openjdk-17-jdk >/dev/null 2>&1; then
+                sudo add-apt-repository -y ppa:openjdk-r/ppa 2>&1 | tail -n 3
+                sudo $PKG_UPDATE 2>&1 | tail -n 3
+                if run_package_install "$PKG_INSTALL --no-install-recommends openjdk-17-jdk" "重新尝试安装..."; then
                     install_success=true
                 fi
             fi
+            
+            unset DEBIAN_FRONTEND
+            unset NEEDRESTART_MODE
             ;;
         yum)
             log_info "使用 yum 安装 OpenJDK 17..."
             # CentOS 8+ / RHEL 8+
-            if sudo $PKG_INSTALL java-17-openjdk java-17-openjdk-devel >/dev/null 2>&1; then
+            if run_package_install "$PKG_INSTALL java-17-openjdk java-17-openjdk-devel" "正在安装 OpenJDK 17（请耐心等待）..."; then
                 install_success=true
             else
                 # CentOS 7 可能需要额外的仓库
                 log_info "尝试启用额外仓库..."
-                sudo $PKG_INSTALL epel-release >/dev/null 2>&1
-                if sudo $PKG_INSTALL java-17-openjdk java-17-openjdk-devel >/dev/null 2>&1; then
+                run_package_install "$PKG_INSTALL epel-release" "安装 EPEL 仓库..."
+                if run_package_install "$PKG_INSTALL java-17-openjdk java-17-openjdk-devel" "重新尝试安装..."; then
                     install_success=true
                 fi
             fi
             ;;
         dnf)
             log_info "使用 dnf 安装 OpenJDK 17..."
-            if sudo $PKG_INSTALL java-17-openjdk java-17-openjdk-devel >/dev/null 2>&1; then
+            if run_package_install "$PKG_INSTALL java-17-openjdk java-17-openjdk-devel" "正在安装 OpenJDK 17（请耐心等待）..."; then
                 install_success=true
             fi
             ;;
         zypper)
             log_info "使用 zypper 安装 OpenJDK 17..."
-            if sudo $PKG_INSTALL java-17-openjdk java-17-openjdk-devel >/dev/null 2>&1; then
+            if run_package_install "$PKG_INSTALL java-17-openjdk java-17-openjdk-devel" "正在安装 OpenJDK 17（请耐心等待）..."; then
                 install_success=true
             fi
             ;;
@@ -1092,37 +1149,37 @@ install_other_deps() {
     
     case "$PKG_MANAGER" in
         apt)
-            sudo $PKG_INSTALL \
+            run_package_install "$PKG_INSTALL \
                 curl \
                 git \
                 unzip \
                 supervisor \
                 redis-server \
-                nginx
+                nginx" "正在安装系统依赖（Git, Nginx, Redis 等）..."
             
             # Ubuntu/Debian 服务名
             REDIS_SERVICE="redis-server"
             ;;
         yum|dnf)
-            sudo $PKG_INSTALL \
+            run_package_install "$PKG_INSTALL \
                 curl \
                 git \
                 unzip \
                 supervisor \
                 redis \
-                nginx
+                nginx" "正在安装系统依赖（Git, Nginx, Redis 等）..."
             
             # CentOS/RHEL 服务名
             REDIS_SERVICE="redis"
             ;;
         zypper)
-            sudo $PKG_INSTALL \
+            run_package_install "$PKG_INSTALL \
                 curl \
                 git \
                 unzip \
                 supervisor \
                 redis \
-                nginx
+                nginx" "正在安装系统依赖（Git, Nginx, Redis 等）..."
             
             REDIS_SERVICE="redis"
             ;;
