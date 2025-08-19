@@ -658,17 +658,74 @@ install_jdk17() {
             log_info "检测到海外服务器，使用默认 APT 源..."
         fi
         log_info "使用 apt 安装 OpenJDK 17..."
-        if sudo apt-get update >/dev/null 2>&1 && sudo apt-get install -y openjdk-17-jdk >/dev/null 2>&1; then
+        
+        # 设置非交互模式，避免等待用户输入
+        export DEBIAN_FRONTEND=noninteractive
+        export NEEDRESTART_MODE=a  # 自动重启服务
+        
+        # 更新包列表（显示简化进度）
+        log_info "更新软件包列表..."
+        if ! sudo apt-get update 2>&1 | tail -n 5; then
+            log_warning "更新软件包列表失败，继续尝试安装"
+        fi
+        
+        # 安装 JDK（显示实时进度）
+        log_info "正在安装 OpenJDK 17（请耐心等待）..."
+        
+        # 创建临时文件存储输出
+        local temp_log="/tmp/jdk_install_$$.log"
+        
+        # 后台运行安装命令，同时显示最后5行输出
+        (
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+                --no-install-recommends \
+                -o Dpkg::Options::="--force-confdef" \
+                -o Dpkg::Options::="--force-confold" \
+                openjdk-17-jdk 2>&1 | while IFS= read -r line; do
+                echo "$line" >> "$temp_log"
+                # 每隔一段时间显示最新状态
+                if [[ "$line" == *"Unpacking"* ]] || \
+                   [[ "$line" == *"Setting up"* ]] || \
+                   [[ "$line" == *"Processing"* ]]; then
+                    echo "  进度: $line" | cut -c 1-80
+                fi
+            done
+        )
+        local apt_result=$?
+        
+        # 检查安装结果
+        if [ $apt_result -eq 0 ] || grep -q "Setting up openjdk-17-jdk" "$temp_log" 2>/dev/null; then
             install_success=true
+            log_success "OpenJDK 17 安装完成"
         else
+            # 显示错误信息
+            if [ -f "$temp_log" ]; then
+                log_warning "安装可能失败，最后几行日志："
+                tail -n 10 "$temp_log" | sed 's/^/  /'
+            fi
+            
             # 尝试添加PPA仓库
             log_info "尝试添加 OpenJDK PPA 仓库..."
-            sudo add-apt-repository -y ppa:openjdk-r/ppa >/dev/null 2>&1
-            sudo apt-get update >/dev/null 2>&1
-            if sudo apt-get install -y openjdk-17-jdk >/dev/null 2>&1; then
+            sudo add-apt-repository -y ppa:openjdk-r/ppa 2>&1 | tail -n 3
+            sudo apt-get update 2>&1 | tail -n 3
+            
+            # 再次尝试安装
+            log_info "重新尝试安装..."
+            if sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+                --no-install-recommends \
+                -o Dpkg::Options::="--force-confdef" \
+                -o Dpkg::Options::="--force-confold" \
+                openjdk-17-jdk 2>&1 | tail -n 5; then
                 install_success=true
             fi
         fi
+        
+        # 清理临时文件
+        rm -f "$temp_log"
+        
+        # 恢复环境变量
+        unset DEBIAN_FRONTEND
+        unset NEEDRESTART_MODE
     # CentOS/RHEL 系统
     elif command -v yum >/dev/null 2>&1; then
         # 只有在中国大陆服务器上才配置中国镜像源
@@ -683,15 +740,24 @@ install_jdk17() {
             log_info "检测到海外服务器，使用默认 YUM 源..."
         fi
         log_info "使用 yum 安装 OpenJDK 17..."
+        
+        # 显示简化进度的 yum 安装
+        log_info "正在安装 OpenJDK 17（请耐心等待）..."
+        
         # CentOS 8+ / RHEL 8+
-        if sudo yum install -y java-17-openjdk java-17-openjdk-devel >/dev/null 2>&1; then
+        if sudo yum install -y java-17-openjdk java-17-openjdk-devel 2>&1 | \
+            grep -E "(Installing|Installed|Complete|Error)" | tail -n 5; then
             install_success=true
+            log_success "OpenJDK 17 安装完成"
         else
             # CentOS 7 可能需要额外的仓库
             log_info "尝试启用额外仓库..."
-            sudo yum install -y epel-release >/dev/null 2>&1
-            if sudo yum install -y java-17-openjdk java-17-openjdk-devel >/dev/null 2>&1; then
+            sudo yum install -y epel-release 2>&1 | tail -n 3
+            
+            if sudo yum install -y java-17-openjdk java-17-openjdk-devel 2>&1 | \
+                grep -E "(Installing|Installed|Complete|Error)" | tail -n 5; then
                 install_success=true
+                log_success "OpenJDK 17 安装完成"
             fi
         fi
     # Fedora 系统
@@ -708,8 +774,12 @@ install_jdk17() {
             log_info "检测到海外服务器，使用默认 DNF 源..."
         fi
         log_info "使用 dnf 安装 OpenJDK 17..."
-        if sudo dnf install -y java-17-openjdk java-17-openjdk-devel >/dev/null 2>&1; then
+        log_info "正在安装 OpenJDK 17（请耐心等待）..."
+        
+        if sudo dnf install -y java-17-openjdk java-17-openjdk-devel 2>&1 | \
+            grep -E "(Installing|Installed|Complete|Error)" | tail -n 5; then
             install_success=true
+            log_success "OpenJDK 17 安装完成"
         fi
     # openSUSE 系统
     elif command -v zypper >/dev/null 2>&1; then
