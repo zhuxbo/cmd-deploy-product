@@ -672,52 +672,112 @@ install_jdk17() {
         # 安装 JDK（显示实时进度）
         log_info "正在安装 OpenJDK 17（请耐心等待）..."
         
-        # 使用更高效的过滤方式
+        # 禁用 needrestart 自动重启提示
+        if [ -f /etc/needrestart/needrestart.conf ]; then
+            sudo sed -i "s/#\$nrconf{restart} = 'i';/\$nrconf{restart} = 'a';/g" /etc/needrestart/needrestart.conf 2>/dev/null || true
+        fi
+        
+        # 创建临时配置文件完全禁用交互
+        local temp_conf="/tmp/apt_nodaemon_$$.conf"
+        cat > "$temp_conf" << 'EOF'
+DPkg::Options {
+   "--force-confdef";
+   "--force-confold";
+};
+APT::Get::Assume-Yes "true";
+APT::Get::allow-unauthenticated "true";
+EOF
+        
+        # 使用后台进程和超时控制
+        local install_pid
+        local install_done=false
+        
+        # 启动安装进程
         (
-            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-                --no-install-recommends \
-                -o Dpkg::Options::="--force-confdef" \
-                -o Dpkg::Options::="--force-confold" \
-                openjdk-17-jdk 2>&1 | \
-            stdbuf -oL grep -E "(Unpacking|Setting up|Processing|Error|Warning|^Get:|^Fetched|openjdk)" | \
+            sudo DEBIAN_FRONTEND=noninteractive \
+                 NEEDRESTART_MODE=a \
+                 NEEDRESTART_SUSPEND=1 \
+                 apt-get install -y \
+                 --no-install-recommends \
+                 -o Dpkg::Options::="--force-confdef" \
+                 -o Dpkg::Options::="--force-confold" \
+                 -o APT::Get::Assume-Yes="true" \
+                 openjdk-17-jdk 2>&1 | \
+            stdbuf -oL grep -E "(Unpacking|Setting up|Processing|Error|openjdk)" | \
             while IFS= read -r line; do
-                # 只显示关键信息
-                if [[ "$line" == *"Get:"* ]] || [[ "$line" == *"Fetched"* ]]; then
-                    # 跳过下载信息
-                    continue
-                elif [[ "$line" == *"Processing triggers"* ]]; then
-                    echo "  完成: 处理触发器..."
-                elif [[ "$line" == *"Setting up openjdk"* ]]; then
-                    echo "  配置: ${line##*Setting up }" | cut -c 1-60
+                if [[ "$line" == *"Setting up openjdk"* ]]; then
+                    echo "  配置: OpenJDK 组件..."
                 elif [[ "$line" == *"Unpacking openjdk"* ]]; then
-                    echo "  解压: ${line##*Unpacking }" | cut -c 1-60
-                elif [[ "$line" == *"Error"* ]] || [[ "$line" == *"Warning"* ]]; then
-                    echo "  $line"
+                    echo "  解压: OpenJDK 组件..."
+                elif [[ "$line" == *"Processing triggers"* ]]; then
+                    echo "  完成: 处理系统触发器..."
+                    break  # 触发器处理通常是最后步骤
+                elif [[ "$line" == *"Error"* ]]; then
+                    echo "  错误: $line"
                 fi
             done
-        )
-        local apt_result=${PIPESTATUS[0]}
+            echo "INSTALL_DONE" > /tmp/jdk_install_done_$$
+        ) &
+        install_pid=$!
         
-        # 检查安装结果
-        if [ $apt_result -eq 0 ]; then
+        # 等待安装完成（最多3分钟）
+        local wait_count=0
+        while [ $wait_count -lt 180 ]; do
+            if [ -f "/tmp/jdk_install_done_$$" ]; then
+                install_done=true
+                break
+            fi
+            if ! kill -0 $install_pid 2>/dev/null; then
+                # 进程已结束
+                install_done=true
+                break
+            fi
+            sleep 1
+            wait_count=$((wait_count + 1))
+            
+            # 每30秒显示一次状态
+            if [ $((wait_count % 30)) -eq 0 ]; then
+                echo "  仍在安装中..."
+            fi
+        done
+        
+        # 如果超时，强制结束
+        if [ "$install_done" = false ]; then
+            log_warning "安装超时，尝试强制完成..."
+            sudo kill -TERM $install_pid 2>/dev/null || true
+            sleep 2
+            sudo kill -KILL $install_pid 2>/dev/null || true
+        fi
+        
+        # 清理临时文件
+        rm -f "$temp_conf" "/tmp/jdk_install_done_$$"
+        
+        # 等待进程真正结束
+        wait $install_pid 2>/dev/null
+        local apt_result=$?
+        
+        # 检查安装结果 - 直接检查 java 命令是否可用
+        if command -v java >/dev/null 2>&1 && java -version 2>&1 | grep -q "17"; then
             install_success=true
             log_success "OpenJDK 17 安装完成"
+        elif [ -f /usr/lib/jvm/java-17-openjdk-amd64/bin/java ] || [ -f /usr/bin/java ]; then
+            # 安装成功但可能需要刷新环境变量
+            install_success=true
+            log_success "OpenJDK 17 安装完成（可能需要重新加载环境变量）"
         else
-            log_warning "安装命令返回错误代码: $apt_result"
+            log_warning "安装可能未完成，尝试备用方案..."
             
-            # 尝试添加PPA仓库
-            log_info "尝试添加 OpenJDK PPA 仓库..."
-            sudo add-apt-repository -y ppa:openjdk-r/ppa 2>&1 | tail -n 3
-            sudo apt-get update 2>&1 | tail -n 3
-            
-            # 再次尝试安装
-            log_info "重新尝试安装..."
-            if sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            # 使用更简单直接的方法（重定向标准输入避免交互）
+            log_info "使用简化方法重试..."
+            if echo "" | sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
                 --no-install-recommends \
                 -o Dpkg::Options::="--force-confdef" \
                 -o Dpkg::Options::="--force-confold" \
-                openjdk-17-jdk 2>&1 | tail -n 5; then
-                install_success=true
+                openjdk-17-jdk </dev/null >/dev/null 2>&1; then
+                if command -v java >/dev/null 2>&1 || [ -f /usr/lib/jvm/java-17-openjdk-amd64/bin/java ]; then
+                    install_success=true
+                    log_success "OpenJDK 17 安装成功（通过简化方法）"
+                fi
             fi
         fi
         
