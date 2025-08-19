@@ -28,16 +28,16 @@ show_help() {
     echo "用法: $0 [选项]"
     echo ""
     echo "选项:"
-    echo "  -h, --help       显示此帮助信息"
-    echo "  -d, --diagnose   运行PHP扩展深度诊断"
-    echo "  --china          强制使用中国镜像源"
-    echo "  --intl           强制使用国际镜像源"
+    echo "  -h, help         显示此帮助信息"
+    echo "  -d, diagnose     运行PHP扩展深度诊断"
+    echo "  china            强制使用中国镜像源"
+    echo "  intl             强制使用国际镜像源"
     echo ""
     echo "示例:"
     echo "  $0               # 正常运行依赖检查（自动检测地理位置）"
-    echo "  $0 --diagnose    # 运行深度诊断"
-    echo "  $0 --china       # 强制使用中国镜像源（适合中国大陆服务器）"
-    echo "  $0 --intl        # 强制使用国际镜像源（适合海外服务器）"
+    echo "  $0 diagnose      # 运行深度诊断"
+    echo "  $0 china         # 强制使用中国镜像源（适合中国大陆服务器）"
+    echo "  $0 intl          # 强制使用国际镜像源（适合海外服务器）"
     echo ""
 }
 
@@ -1408,20 +1408,20 @@ main() {
     
     while [[ $# -gt 0 ]]; do
         case $1 in
-            -h|--help)
+            -h|help)
                 show_help
                 exit 0
                 ;;
-            -d|--diagnose)
+            -d|diagnose)
                 run_diagnose=true
                 shift
                 ;;
-            --china)
+            china)
                 export FORCE_CHINA_MIRROR=1
                 log_info "强制使用中国镜像源"
                 shift
                 ;;
-            --intl|--international)
+            intl|international)
                 export FORCE_CHINA_MIRROR=0
                 log_info "强制使用国际镜像源"
                 shift
@@ -1514,7 +1514,7 @@ main() {
     
     echo
     log_info "如果composer install报错，可运行深度诊断："
-    log_info "  $0 --diagnose"
+    log_info "  $0 diagnose"
 }
 
 # 执行主函数

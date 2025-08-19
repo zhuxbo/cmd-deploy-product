@@ -814,7 +814,7 @@ main() {
         check)
             check_database
             ;;
-        help|--help|-h)
+        help|-h)
             show_usage
             ;;
         *)

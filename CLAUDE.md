@@ -367,10 +367,39 @@ composer config -g repo.packagist composer https://mirrors.cloud.tencent.com/com
 npm config set registry https://registry.npmmirror.com
 ```
 
+## 命令行参数规范
+
+### 参数格式统一
+- **不使用双减号**：所有脚本参数统一不使用 `--`，直接使用参数名
+- **帮助参数**：`-h` 或 `help`（不是 `--help`）
+- **仓库选择**：`gitee` 或 `github`（不是 `--gitee` 或 `--github`）
+- **其他参数**：`china`、`intl`、`diagnose`、`check` 等（不带 `--`）
+
+### 参数示例
+```bash
+# 正确的参数格式
+./install.sh gitee           # 不是 --gitee
+./update.sh github           # 不是 --github
+./install-deps.sh china      # 不是 --china
+./install-deps-bt.sh diagnose  # 不是 --diagnose
+./setup-queue.sh check       # 不是 --check
+
+# 帮助参数
+./script.sh -h               # 短格式
+./script.sh help             # 长格式（不带 --）
+```
+
 ## 最近更新
 
+- **2025-08-18**: 统一参数格式规范
+  - 所有脚本参数去掉 `--` 双减号，统一使用简洁格式
+  - install.sh 和 update.sh: `gitee`、`github` 参数
+  - install-deps.sh 和 install-deps-bt.sh: `china`、`intl`、`diagnose` 参数
+  - setup-queue.sh: `check` 参数
+  - keeper.sh: 保持 `help`、`-h` 参数
+  - 更新所有文档中的参数示例
 - **2025-08-18**: 添加仓库源选择功能
-  - install.sh 和 update.sh 添加 `--gitee` 和 `--github` 参数支持
+  - install.sh 和 update.sh 添加 `gitee` 和 `github` 参数支持
   - 允许用户强制指定从特定仓库（Gitee 或 GitHub）拉取代码
   - 未指定时保持原有的自动切换逻辑（优先 Gitee，失败时自动切换到 GitHub）
   - 强制指定仓库时，如果指定仓库失败则直接报错，不会自动切换

@@ -81,11 +81,11 @@ PRODUCTION_REPO_GITHUB="https://github.com/zhuxbo/production-code.git"
 FORCE_REPO=""
 for arg in "$@"; do
     case $arg in
-        --gitee)
+        gitee)
             FORCE_REPO="gitee"
             log_info "强制使用 Gitee 仓库"
             ;;
-        --github)
+        github)
             FORCE_REPO="github"
             log_info "强制使用 GitHub 仓库"
             ;;

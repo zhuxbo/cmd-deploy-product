@@ -25,9 +25,9 @@ show_help() {
     echo "用法: $0 [选项]"
     echo ""
     echo "选项:"
-    echo "  -h, --help       显示此帮助信息"
-    echo "  --china          强制使用中国镜像源"
-    echo "  --intl           强制使用国际镜像源"
+    echo "  -h, help         显示此帮助信息"
+    echo "  china            强制使用中国镜像源"
+    echo "  intl             强制使用国际镜像源"
     echo ""
     echo "说明:"
     echo "  本脚本仅适用于标准Linux环境"
@@ -35,8 +35,8 @@ show_help() {
     echo ""
     echo "示例:"
     echo "  $0               # 检查和安装运行环境依赖（自动检测地理位置）"
-    echo "  $0 --china       # 强制使用中国镜像源（适合中国大陆服务器）"
-    echo "  $0 --intl        # 强制使用国际镜像源（适合海外服务器）"
+    echo "  $0 china         # 强制使用中国镜像源（适合中国大陆服务器）"
+    echo "  $0 intl          # 强制使用国际镜像源（适合海外服务器）"
     echo ""
 }
 
@@ -1180,16 +1180,16 @@ main() {
     # 参数解析
     while [[ $# -gt 0 ]]; do
         case $1 in
-            -h|--help)
+            -h|help)
                 show_help
                 exit 0
                 ;;
-            --china)
+            china)
                 export FORCE_CHINA_MIRROR=1
                 log_info "强制使用中国镜像源"
                 shift
                 ;;
-            --intl|--international)
+            intl|international)
                 export FORCE_CHINA_MIRROR=0
                 log_info "强制使用国际镜像源"
                 shift

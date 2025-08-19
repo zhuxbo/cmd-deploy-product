@@ -33,8 +33,8 @@
 
 ```bash
 ./install.sh                # 自动选择最优仓库
-./install.sh --gitee        # 强制从 Gitee 拉取代码
-./install.sh --github       # 强制从 GitHub 拉取代码
+./install.sh gitee          # 强制从 Gitee 拉取代码
+./install.sh github         # 强制从 GitHub 拉取代码
 ```
 
 **后续步骤：**
@@ -64,7 +64,7 @@
 sudo ./install-deps-bt.sh
 
 # 诊断模式（排查问题）
-sudo ./install-deps-bt.sh -d
+sudo ./install-deps-bt.sh diagnose
 ```
 
 **宝塔环境要求：**
@@ -136,9 +136,9 @@ sudo ./install-deps-bt.sh -d
 ./update.sh update nginx          # 仅更新Nginx配置
 
 # 指定仓库源
-./update.sh --gitee              # 强制从 Gitee 拉取代码
-./update.sh --github             # 强制从 GitHub 拉取代码
-./update.sh --gitee update api   # 从 Gitee 更新后端
+./update.sh gitee                # 强制从 Gitee 拉取代码
+./update.sh github               # 强制从 GitHub 拉取代码
+./update.sh gitee update api     # 从 Gitee 更新后端
 
 # 备份管理
 ./update.sh list                  # 列出所有备份

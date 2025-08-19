@@ -471,8 +471,8 @@ SSL证书管理系统 - 队列和定时任务配置脚本
     $0 [选项]
 
 选项:
-    -h, --help     显示此帮助信息
-    --check        仅检查当前配置状态
+    -h, help       显示此帮助信息
+    check          仅检查当前配置状态
     
 功能:
     - 自动检测宝塔面板环境
@@ -490,11 +490,11 @@ EOF
 
 # 参数处理
 case "${1:-}" in
-    -h|--help)
+    -h|help)
         show_help
         exit 0
         ;;
-    --check)
+    check)
         environment_check >/dev/null 2>&1 || true
         check_status
         exit 0
