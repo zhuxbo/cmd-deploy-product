@@ -18,15 +18,17 @@
 - **多系统支持**: Ubuntu/Debian、CentOS/RHEL、Fedora
 - **宝塔面板兼容**: 特殊处理宝塔环境
 - **模块化更新**: 支持单独更新 api/admin/user/easy/nginx
-- **文件保留**: 自动保留用户配置和数据
-- **服务管理**: 自动管理 Nginx、队列等服务
+- **文件保留**: 自动保留用户配置和数据（特别是 frontend/web 目录）
+- **服务管理**: 非宝塔环境自动配置、宝塔环境提供手动指引
 
 ## 文件结构
 
 ```
 cmd-deploy-product/
 ├── install.sh          # 首次安装脚本
-├── install-deps.sh     # 依赖安装脚本（通用）
+├── install-deps.sh     # 依赖检查脚本（标准环境）
+├── install-deps-bt.sh  # PHP配置脚本（宝塔环境）
+├── setup-queue.sh      # 队列和定时任务设置脚本
 ├── update.sh           # 系统更新脚本
 ├── keeper.sh           # 备份管理脚本
 ├── claude.md           # 本文档（Claude 上下文）
@@ -37,35 +39,67 @@ cmd-deploy-product/
 
 ### install.sh - 首次安装
 
+**职责：**
 - 克隆 production-code 仓库
 - 备份现有系统（如果存在）
-- 部署新文件
+- 部署所有文件（包括 backend、frontend、nginx）
+- frontend/web 目录从生产代码仓库复制
 - 初始化 Laravel 应用
 - 配置文件权限
+- **专注于部署代码**，不处理队列和定时任务
+- 提示用户：
+  - 宝塔环境：手动配置队列和定时任务
+  - 非宝塔环境：运行 setup-queue.sh
 
-### install-deps.sh - 依赖安装
+### install-deps.sh - 依赖检查（标准环境）
 
-- 多系统检测（Ubuntu/CentOS/Fedora）
-- PHP 8.3+ 安装和扩展配置
-- Redis、Supervisor 安装
-- 宝塔环境特殊处理
-- PHP 配置优化
+**职责：**
+- 检测 PHP 8.3+ 和必需扩展
+- 检测 MySQL、Redis、Nginx 服务
+- 检测 Composer 安装状态
+- **不自动安装**，仅提供安装指引
+- 宝塔环境自动引导到 install-deps-bt.sh
+
+### install-deps-bt.sh - PHP配置（宝塔环境）
+
+**职责：**
+- 检测并选择宝塔 PHP 版本
+- 启用被禁用的 PHP 函数
+- 检测和卸载冲突的系统 PHP
+- 设置默认 PHP 版本链接
+- 检查并修复 Composer
+
+### setup-queue.sh - 队列和定时任务设置
+
+**职责：**
+- 检测运行环境（宝塔/标准）
+- 宝塔环境：输出手动配置步骤
+- 标准环境：自动配置 Supervisor 和 Crontab
+- 使用站点名避免多站点冲突
+- 独立于 install.sh，可单独运行
 
 ### update.sh - 系统更新
 
+**职责：**
 - 拉取最新生产代码
 - 创建时间戳备份
 - 保留重要文件
-- 部署新文件
+- **永不覆盖 frontend/web 目录**
+- 部署新文件（仅更新 admin/user/easy）
 - Laravel 缓存清理
 - 服务重启
+- 支持模块化更新
+- 支持备份恢复
 
 ### keeper.sh - 备份管理
 
-- 数据库备份
-- 配置文件备份
-- 轮转机制（保留最新 N 个备份）
+**职责：**
+- 数据库备份（排除 _logs 表）
+- 配置文件备份（.env）
+- 轮转机制（默认保留 30 个备份）
 - 备份验证
+- 支持备份恢复
+- 支持定时任务
 
 ## 关键配置
 
@@ -81,7 +115,8 @@ cmd-deploy-product/
     "frontend": {
       "admin": ["platform-config.json", "logo.svg"],
       "user": ["platform-config.json", "logo.svg", "qrcode.png", "favicon.ico"],
-      "easy": ["config.json"]
+      "easy": ["config.json"],
+      "web": ["*"] // 整个目录都保留，永不更新
     }
   },
   "services": {
@@ -104,7 +139,7 @@ cmd-deploy-product/
 - **Fedora**: 最新版本支持
 - **宝塔面板**: 特殊适配处理
 
-### 必需软件
+### 必需软件（需预先安装）
 
 - **PHP 8.3+**: 包含必要扩展
   - **composer.json 明确要求**：bcmath, calendar, fileinfo, gd, iconv, intl, json, mbstring, openssl, pcntl, pdo, redis, zip
@@ -120,17 +155,24 @@ cmd-deploy-product/
 ### 首次部署
 
 ```bash
-# 1. 安装系统依赖
-sudo ./install-deps.sh
+# 1. 检查系统依赖（不会自动安装）
+./install-deps.sh  # 标准环境
+./install-deps-bt.sh  # 宝塔环境
 
-# 2. 执行首次安装
+# 2. 执行首次安装（会自动从生产代码仓库复制 frontend/web）
 ./install.sh
 
-# 3. 配置数据库连接
-nano backend/.env
+# 3. 配置 Nginx（手动）
+# 在站点配置中引入：
+# root /path/to/site;
+# include /path/to/site/nginx/manager.conf;
 
-# 4. 完成 Laravel 初始化
-cd backend && php artisan migrate
+# 4. 访问安装向导（会自动处理数据库配置）
+# http://your-domain/install
+
+# 5. 设置队列和定时任务
+./setup-queue.sh  # 非宝塔环境自动配置
+# 宝塔环境需手动配置
 ```
 
 ### 系统更新
@@ -179,10 +221,13 @@ FORCE_UPDATE=1 ./update.sh
 │   ├── user/            # 用户端
 │   │   ├── platform-config.json  # 保留
 │   │   ├── logo.svg              # 保留
-│   │   └── qrcode.png            # 保留
+│   │   ├── qrcode.png            # 保留
 │   │   └── favicon.ico           # 保留
-│   └── easy/            # 简易端
-│       └── config.json           # 保留
+│   ├── easy/            # 简易端
+│   │   └── config.json           # 保留
+│   └── web/             # 静态文件（永不更新）
+│       ├── index.php    # 入口文件
+│       └── favicon.ico  # 网站图标
 ├── nginx/               # Nginx 配置
 ├── backup/              # 备份目录
 │   ├── install/         # 安装备份
@@ -258,10 +303,11 @@ FORCE_UPDATE=1 ./update.sh
 
 ### manager.conf 特点
 
+- **手动引入配置**: 需要在站点配置中手动引入
 - **路由优先级**: API > Admin/Easy > User
 - **静态资源缓存**: 1 年有效期
 - **HTML5 History**: 支持前端路由
-- **自动路径更新**: 部署时更新实际路径
+- **根目录要求**: 必须在 server 块中设置 root 为站点目录
 
 ## 数据库管理
 
@@ -390,6 +436,13 @@ npm config set registry https://registry.npmmirror.com
 ```
 
 ## 最近更新
+
+- **2025-08-23**: 重大架构调整
+  - **依赖管理模式变更**: install-deps.sh 从安装改为仅检查，要求管理员预先安装服务
+  - **Nginx 配置方式变更**: 取消自动配置，改为手动引入 manager.conf
+  - **frontend/web 目录保护**: 更新时永不覆盖该目录，用于存放静态文件
+  - **脚本职责分离**: install.sh 专注部署代码，setup-queue.sh 负责队列和定时任务
+  - **访问路径简化**: 安装向导从 /install.php 改为 /install
 
 - **2025-08-18**: 统一参数格式规范
   - 所有脚本参数去掉 `--` 双减号，统一使用简洁格式

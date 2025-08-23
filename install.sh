@@ -323,18 +323,6 @@ set_permissions() {
     log_success "权限设置完成"
 }
 
-# 记录定时任务配置（不自动配置）
-setup_cron() {
-    # 仅记录配置信息，稍后统一提示
-    SITE_NAME=$(basename "$SITE_ROOT")
-    CRON_CMD="* * * * * cd $SITE_ROOT/backend && php artisan schedule:run >> /dev/null 2>&1"
-}
-
-# 记录队列守护进程配置（不自动配置）
-setup_queue() {
-    # 仅记录配置信息，稍后统一提示
-    SITE_NAME=$(basename "$SITE_ROOT")
-}
 
 # 主函数
 main() {
@@ -365,12 +353,6 @@ main() {
     # 设置权限
     echo
     set_permissions
-    
-    # 配置定时任务
-    setup_cron
-    
-    # 配置队列守护进程
-    setup_queue
 
     echo
     log_success "安装完成！版本: $VERSION"
@@ -394,6 +376,16 @@ main() {
     log_warning ""
     log_warning "2. 访问安装向导: http://your-domain/install"
     log_warning "   （安装向导将自动处理数据库配置、迁移和初始化等）"
+    log_warning ""
+    log_warning "3. 配置队列和定时任务："
+    if check_bt_panel; then
+        log_warning "   宝塔环境：请按照文档手动配置定时任务和队列"
+        log_warning "   - 定时任务：计划任务 -> 添加任务（每分钟执行）"
+        log_warning "   - 队列守护：Supervisor管理器 -> 添加守护进程"
+    else
+        log_warning "   非宝塔环境：请运行 setup-queue.sh 脚本自动配置"
+        log_warning "   ./setup-queue.sh"
+    fi
     
     # 询问是否执行依赖安装
     echo
@@ -430,36 +422,6 @@ main() {
         log_info "跳过依赖安装，请确保已安装必需的运行环境"
     fi
     
-    # 定时任务和队列配置提示
-    echo
-    log_warning "=== 请手动配置以下服务 ==="
-    log_warning ""
-    log_warning "3. 定时任务配置："
-    if check_bt_panel; then
-        log_warning "   宝塔面板："
-        log_warning "   - 任务类型: Shell脚本"
-        log_warning "   - 执行周期: 1分钟"
-        log_warning "   - 执行用户: www"
-        log_warning "   - 脚本内容: php $SITE_ROOT/backend/artisan schedule:run"
-    else
-        log_warning "   使用 crontab -e 添加："
-        log_warning "   $CRON_CMD"
-    fi
-    log_warning ""
-    log_warning "4. 队列守护进程（可选）："
-    if check_bt_panel; then
-        log_warning "   宝塔面板 Supervisor："
-        log_warning "   - 启动用户: www"
-        log_warning "   - 启动命令: php artisan queue:work --queue Task"
-        log_warning "   - 进程目录: $SITE_ROOT/backend"
-    else
-        log_warning "   Supervisor 配置："
-        log_warning "   - 程序名: laravel-worker-$SITE_NAME"
-        log_warning "   - 命令: php artisan queue:work --queue Task"
-        log_warning "   - 目录: $SITE_ROOT/backend"
-        log_warning "   - 用户: $(stat -c "%U" "$SITE_ROOT")"
-    fi
-    log_warning "================================="
     
     # 安装流程完成提示
     echo

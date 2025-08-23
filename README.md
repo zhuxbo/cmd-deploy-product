@@ -10,7 +10,7 @@
 | ------------------ | --------------------------------- | ------------ |
 | install.sh         | 首次安装脚本                      | 通用         |
 | install-deps-bt.sh | 宝塔环境依赖安装                  | 宝塔面板环境 |
-| install-deps.sh    | 标准 Linux 环境依赖安装           | 非宝塔环境   |
+| install-deps.sh    | 标准 Linux 环境依赖检查           | 非宝塔环境   |
 | setup-queue.sh     | 标准 Linux 环境定时任务和队列设置 | 非宝塔环境   |
 | update.sh          | 系统更新脚本                      | 通用         |
 | keeper.sh          | 备份管理脚本                      | 通用         |
@@ -23,10 +23,12 @@
 
 - 从 production-code 仓库拉取生产代码
 - 自动备份现有部署（如果存在）
-- 部署所有系统文件
+- 部署所有系统文件（frontend/web 目录需手动创建）
 - 初始化 Laravel 环境
 - 设置正确的文件权限
-- 自动配置定时任务和队列守护进程（使用站点名避免多站点冲突）
+- 提示配置队列和定时任务：
+  - 宝塔环境：提供手动配置指引
+  - 非宝塔环境：提示运行 setup-queue.sh
 - 安装完成后提示是否执行依赖检查
 
 **使用方法：**
@@ -39,10 +41,16 @@
 
 **后续步骤：**
 
-1. 编辑数据库配置：`vim backend/.env`
-2. 配置 Nginx：将 nginx/manager.conf 链接到系统配置
-3. 访问 `/install.php` 完成系统安装
-4. 删除安装文件：`rm backend/public/install.php`
+1. 配置 Nginx：在站点配置中引入 nginx/manager.conf
+   ```nginx
+   # 在 server 块中添加：
+   root /path/to/site;
+   include /path/to/site/nginx/manager.conf;
+   ```
+2. 访问 `/install` 完成系统安装（自动处理数据库配置）
+3. 配置队列和定时任务：
+   - 宝塔环境：按照文档手动配置
+   - 非宝塔环境：运行 `./setup-queue.sh`
 
 ### 2. install-deps-bt.sh - 宝塔环境依赖安装脚本
 
@@ -73,18 +81,27 @@ sudo ./install-deps-bt.sh diagnose
 - 手动安装以下扩展：calendar, fileinfo, mbstring, redis
 - 其他扩展宝塔通常已预装
 
-### 3. install-deps.sh - 标准 Linux 环境依赖安装脚本
+### 3. install-deps.sh - 标准 Linux 环境依赖检查脚本
 
-专门用于标准 Linux 环境的 PHP 依赖安装。
+专门用于标准 Linux 环境的 PHP 依赖检查。
 
 **功能特点：**
 
-- 自动检测系统类型（Ubuntu/Debian/CentOS/RHEL/Fedora/openSUSE）
-- 安装 PHP 8.3+ 及所有必需扩展
-- 配置 PHP 优化参数
-- 安装 Redis、Nginx、Git 等附加依赖
-- 安装并配置 Composer
+- 检测 PHP 8.3+ 是否已安装
+- 检测必需的 PHP 扩展
+- 检测 Redis、MySQL、Nginx 等服务
+- 检测 Composer 安装状态
+- 如果缺少依赖，提供安装指引而非自动安装
 - 自动检测宝塔环境并引导使用正确脚本
+
+**前提要求：**
+
+系统管理员应预先安装以下基础服务：
+- PHP 8.3+ 及必需扩展
+- MySQL/MariaDB
+- Redis
+- Nginx
+- Composer
 
 **使用方法：**
 
@@ -101,9 +118,11 @@ sudo ./install-deps-bt.sh diagnose
 - Fedora 30+
 - openSUSE Leap 15+
 
-### 4. setup-queue.sh - 自动设置定时任务和队列
+### 4. setup-queue.sh - 设置定时任务和队列
 
-宝塔环境输出设置方法，标准 Linux 环境自动设置。
+根据环境类型提供不同的处理方式：
+- **宝塔环境**：输出手动设置方法和步骤
+- **标准 Linux 环境**：自动配置 Supervisor 和 Crontab
 
 **使用方法：**
 
@@ -120,6 +139,7 @@ sudo ./install-deps-bt.sh diagnose
 - 支持模块化更新（api/admin/user/easy/nginx/all）
 - 自动备份当前版本
 - 智能保留用户配置和数据
+- **保护 frontend/web 目录**：更新时永不覆盖
 - 服务管理（停止/启动 Nginx 和队列）
 - 版本检查和强制更新选项
 - **备份恢复功能**：可恢复到之前的任何版本
@@ -222,8 +242,11 @@ site-root/               # 站点根目录
 │   ├── user/            # 用户端
 │   │   ├── platform-config.json
 │   │   └── qrcode.png       # 更新时保留
-│   └── easy/            # 简易端
-│       └── config.json     # 更新时保留
+│   ├── easy/            # 简易端
+│   │   └── config.json     # 更新时保留
+│   └── web/             # 静态文件目录（更新时永不覆盖）
+│       ├── index.php    # 入口文件
+│       └── favicon.ico  # 网站图标
 ├── nginx/               # Nginx 配置
 ├── cmd-deploy-scripts/  # 部署脚本目录
 │   ├── source/          # 源码临时目录
@@ -252,17 +275,24 @@ cd /path/to/{your-site}
 git clone https://gitee.com/zhuxbo/cmd-deploy-product.git cmd-deploy-scripts
 cd cmd-deploy-scripts
 
-# 2. 安装系统（会自动检测环境并提示安装依赖）
+# 2. 安装系统（会自动检测环境并提示检查依赖）
 ./install.sh
 # install.sh 会自动检测环境：
-# - 宝塔环境：调用 install-deps-bt.sh
-# - 标准环境：调用 install-deps.sh
+# - 宝塔环境：调用 install-deps-bt.sh（配置PHP）
+# - 标准环境：调用 install-deps.sh（检查依赖）
 
-# 3. 访问安装向导（非宝塔环境需配置 Nginx）
-# http://your-domain/install.php
+# 3. 配置 Nginx（需手动配置）
+# 在站点配置文件的 server 块中添加：
+# root /path/to/your-site;
+# include /path/to/your-site/nginx/manager.conf;
 
-# 4. 设置定时任务和队列
+# 4. 访问安装向导
+# http://your-domain/install
+
+# 5. 设置定时任务和队列
 ./setup-queue.sh
+# - 宝塔环境：输出手动配置步骤
+# - 标准环境：自动配置 Supervisor 和 Crontab
 ```
 
 ### 日常维护
@@ -291,6 +321,9 @@ jq -r '.version' ../config.json
 3. **备份策略**：建议在更新前手动执行 keeper.sh 进行额外备份
 4. **服务中断**：更新时会短暂停止 Web 服务，请选择合适时间
 5. **配置保护**：更新过程会自动保护用户配置和数据
+   - frontend/web 目录永不被更新覆盖
+   - 各端 config 文件保留
+   - backend/.env 保留
 6. **版本兼容**：确保 PHP 版本 >= 8.3
 7. **权限一致性**：storage 和 bootstrap/cache 保持与站点目录相同的所有者
 
