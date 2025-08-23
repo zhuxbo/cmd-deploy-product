@@ -1158,48 +1158,71 @@ configure_php() {
     fi
 }
 
-# 安装其他依赖
-install_other_deps() {
-    log_info "安装其他必要依赖..."
+# 检查其他依赖（仅检测，不安装）
+check_other_deps() {
+    log_info "检查其他必要依赖..."
     
-    case "$PKG_MANAGER" in
-        apt)
-            run_package_install "$PKG_INSTALL \
-                curl \
-                git \
-                unzip \
-                supervisor \
-                redis-server \
-                nginx" "正在安装系统依赖（Git, Nginx, Redis 等）..."
-            
-            # Ubuntu/Debian 服务名
-            REDIS_SERVICE="redis-server"
-            ;;
-        yum|dnf)
-            run_package_install "$PKG_INSTALL \
-                curl \
-                git \
-                unzip \
-                supervisor \
-                redis \
-                nginx" "正在安装系统依赖（Git, Nginx, Redis 等）..."
-            
-            # CentOS/RHEL 服务名
-            REDIS_SERVICE="redis"
-            ;;
-        zypper)
-            run_package_install "$PKG_INSTALL \
-                curl \
-                git \
-                unzip \
-                supervisor \
-                redis \
-                nginx" "正在安装系统依赖（Git, Nginx, Redis 等）..."
-            
-            REDIS_SERVICE="redis"
-            ;;
-        *)
-            log_error "不支持的包管理器: $PKG_MANAGER"
+    local has_error=false
+    
+    # 检查 Nginx
+    if ! command -v nginx &> /dev/null; then
+        log_error "未检测到 Nginx"
+        log_warning "请先安装 Nginx Web 服务器"
+        log_info "参考命令："
+        log_info "  Ubuntu/Debian: sudo apt install nginx"
+        log_info "  CentOS/RHEL: sudo dnf install nginx"
+        has_error=true
+    else
+        log_success "✓ Nginx 已安装"
+    fi
+    
+    # 检查 MySQL/MariaDB
+    if ! command -v mysql &> /dev/null && ! command -v mariadb &> /dev/null; then
+        log_error "未检测到 MySQL/MariaDB"
+        log_warning "请先安装 MySQL 5.7+ 或 MariaDB 10.3+"
+        log_info "参考命令："
+        log_info "  Ubuntu/Debian: sudo apt install mysql-server"
+        log_info "  CentOS/RHEL: sudo dnf install mysql-server"
+        has_error=true
+    else
+        log_success "✓ MySQL/MariaDB 已安装"
+    fi
+    
+    # 检查 Redis
+    if ! command -v redis-server &> /dev/null && ! command -v redis-cli &> /dev/null; then
+        log_error "未检测到 Redis"
+        log_warning "请先安装 Redis 6.0+"
+        log_info "参考命令："
+        log_info "  Ubuntu/Debian: sudo apt install redis-server"
+        log_info "  CentOS/RHEL: sudo dnf install redis"
+        has_error=true
+    else
+        log_success "✓ Redis 已安装"
+    fi
+    
+    # 检查 Supervisor（可选）
+    if ! command -v supervisorctl &> /dev/null; then
+        log_warning "未检测到 Supervisor（可选）"
+        log_info "如需队列守护进程，请安装 Supervisor"
+        log_info "参考命令："
+        log_info "  Ubuntu/Debian: sudo apt install supervisor"
+        log_info "  CentOS/RHEL: sudo dnf install supervisor"
+    else
+        log_success "✓ Supervisor 已安装"
+    fi
+    
+    # 检查基础工具
+    for tool in curl git unzip; do
+        if ! command -v $tool &> /dev/null; then
+            log_warning "未检测到 $tool"
+            log_info "建议安装: sudo $PKG_INSTALL $tool"
+        fi
+    done
+    
+    if [ "$has_error" = true ]; then
+        log_error "缺少必要的服务，请先安装后再运行本脚本"
+        exit 1
+    fi
             return 1
             ;;
     esac
@@ -1298,23 +1321,28 @@ main() {
         install_jdk17
     fi
     
-    # 检查PHP
-    if ! check_php_version || ! check_php_extensions; then
-        log_info "开始安装 PHP 8.3..."
-        install_php_for_system
-        
-        # 重新检查
-        if ! check_php_version; then
-            log_error "PHP 安装失败"
-            exit 1
-        fi
+    # 检查PHP（仅检测，不安装）
+    if ! check_php_version; then
+        log_error "未检测到 PHP 8.3+"
+        log_warning "请先安装 PHP 8.3 或更高版本"
+        log_info "参考命令："
+        log_info "  Ubuntu/Debian: sudo apt install php8.3-fpm php8.3-cli php8.3-common"
+        log_info "  CentOS/RHEL: sudo dnf install php83 php83-php-fpm"
+        log_info "  或在宝塔面板中安装 PHP 8.3"
+        exit 1
+    fi
+    
+    if ! check_php_extensions; then
+        log_error "PHP 扩展不完整"
+        log_warning "请安装缺失的 PHP 扩展"
+        exit 1
     fi
     
     # 配置 PHP
     configure_php
     
-    # 安装其他依赖
-    install_other_deps
+    # 检查其他依赖
+    check_other_deps
     
     # 检查PHP函数
     echo

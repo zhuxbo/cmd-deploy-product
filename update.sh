@@ -531,8 +531,8 @@ save_preserve_files() {
         fi
     fi
     
-    # 保存前端配置文件
-    for component in admin user easy web; do
+    # 保存前端配置文件（web 目录永远保持不变，不需要保存）
+    for component in admin user easy; do
         if [ "$UPDATE_MODULE" = "all" ] || [ "$UPDATE_MODULE" = "$component" ]; then
             if [ -d "$SITE_ROOT/frontend/$component" ]; then
                 log_info "检查 $component 前端需要保护的文件..."
@@ -601,9 +601,9 @@ restore_preserve_files() {
         fi
     fi
     
-    # 恢复前端文件
+    # 恢复前端文件（web 目录永远保持不变，不需要恢复）
     if [ -d "$TEMP_PRESERVE_DIR/frontend" ]; then
-        for component in admin user easy web; do
+        for component in admin user easy; do
             if [ -d "$TEMP_PRESERVE_DIR/frontend/$component" ]; then
                 log_info "恢复 $component 前端保护文件..."
                 if command -v rsync >/dev/null 2>&1; then
@@ -648,8 +648,8 @@ deploy_new_files() {
     
     case "$UPDATE_MODULE" in
         all)
-            # 删除并更新所有模块
-            for dir in backend frontend nginx; do
+            # 删除并更新后端和nginx
+            for dir in backend nginx; do
                 if [ -d "$SOURCE_PATH/$dir" ]; then
                     log_info "更新 $dir..."
                     rm -rf "$SITE_ROOT/$dir"
@@ -657,6 +657,24 @@ deploy_new_files() {
                     cp -a "$SOURCE_PATH/$dir" "$SITE_ROOT/"
                 fi
             done
+            
+            # 更新前端（保留 web 目录）
+            if [ -d "$SOURCE_PATH/frontend" ]; then
+                log_info "更新前端（保留 web 目录）..."
+                # 只删除和更新 admin、user、easy 目录
+                for component in admin user easy; do
+                    if [ -d "$SOURCE_PATH/frontend/$component" ]; then
+                        log_info "  更新 $component..."
+                        rm -rf "$SITE_ROOT/frontend/$component"
+                        mkdir -p "$SITE_ROOT/frontend"
+                        cp -a "$SOURCE_PATH/frontend/$component" "$SITE_ROOT/frontend/"
+                    fi
+                done
+                # web 目录永远保持不变
+                if [ -d "$SITE_ROOT/frontend/web" ]; then
+                    log_info "  保留 web 目录不变"
+                fi
+            fi
             
             # 复制构建信息文件
             if [ -f "$SOURCE_PATH/config.json" ]; then

@@ -241,27 +241,14 @@ deploy_files() {
     log_success "部署完成"
 }
 
-# 更新nginx配置
+# 更新nginx配置路径
 update_nginx_config() {
     NGINX_CONF="$SITE_ROOT/nginx/manager.conf"
     
     if [ -f "$NGINX_CONF" ]; then
         # 替换项目根目录路径
         sed -i "s|__PROJECT_ROOT__|$SITE_ROOT|g" "$NGINX_CONF"
-        
-        if ! check_bt_panel; then
-            # 非宝塔环境自动配置
-            if [ -d "/etc/nginx/sites-enabled" ]; then
-                sudo ln -sf "$NGINX_CONF" /etc/nginx/sites-enabled/cert-manager.conf
-            elif [ -d "/etc/nginx/conf.d" ]; then
-                sudo ln -sf "$NGINX_CONF" /etc/nginx/conf.d/cert-manager.conf
-            fi
-            
-            # 测试并重载配置
-            if sudo nginx -t >/dev/null 2>&1; then
-                sudo systemctl reload nginx >/dev/null 2>&1
-            fi
-        fi
+        log_success "Nginx 配置路径已更新"
     fi
 }
 
@@ -336,56 +323,17 @@ set_permissions() {
     log_success "权限设置完成"
 }
 
-# 配置定时任务
+# 记录定时任务配置（不自动配置）
 setup_cron() {
+    # 仅记录配置信息，稍后统一提示
     SITE_NAME=$(basename "$SITE_ROOT")
-    
-    if ! check_bt_panel; then
-        # 非宝塔环境自动配置
-        CRON_CMD="# Laravel-$SITE_NAME
-* * * * * cd $SITE_ROOT/backend && php artisan schedule:run >> /dev/null 2>&1"
-        
-        if ! crontab -l 2>/dev/null | grep -q "Laravel-$SITE_NAME"; then
-            (crontab -l 2>/dev/null; echo "$CRON_CMD") | crontab -
-            echo
-            log_success "定时任务已配置"
-        fi
-    fi
+    CRON_CMD="* * * * * cd $SITE_ROOT/backend && php artisan schedule:run >> /dev/null 2>&1"
 }
 
-# 配置队列守护进程
+# 记录队列守护进程配置（不自动配置）
 setup_queue() {
+    # 仅记录配置信息，稍后统一提示
     SITE_NAME=$(basename "$SITE_ROOT")
-    
-    if ! check_bt_panel; then
-        # 非宝塔环境自动配置
-        if command -v supervisorctl &> /dev/null; then
-            SUPERVISOR_CONF="/etc/supervisor/conf.d/laravel-worker-$SITE_NAME.conf"
-            
-            sudo tee "$SUPERVISOR_CONF" > /dev/null <<EOF
-[program:laravel-worker-$SITE_NAME]
-process_name=%(program_name)s_%(process_num)02d
-command=php artisan queue:work --queue Task
-directory=$SITE_ROOT/backend
-autostart=true
-autorestart=true
-stopasgroup=true
-killasgroup=true
-user=$SITE_OWNER
-numprocs=1
-redirect_stderr=true
-stdout_logfile=$SITE_ROOT/backend/storage/logs/worker.log
-stopwaitsecs=3600
-EOF
-            
-            sudo supervisorctl reread >/dev/null 2>&1
-            sudo supervisorctl update >/dev/null 2>&1
-            sudo supervisorctl start laravel-worker-$SITE_NAME:* >/dev/null 2>&1
-
-            echo
-            log_success "队列守护进程已配置"
-        fi
-    fi
 }
 
 # 主函数
@@ -429,17 +377,23 @@ main() {
 
     # 显示后续步骤
     echo
-    log_warning "后续步骤："
-    log_warning "1. Nginx 配置【重要】："
-    log_warning "   - 进入网站设置 -> 配置文件"
-    log_warning "   - 注释掉或删除现有的 root 配置行"
-    log_warning "   - 在 下一行 添加："
+    log_warning "=== 重要配置步骤 ==="
+    log_warning "1. Nginx 配置【必须手动配置】："
+    if check_bt_panel; then
+        log_warning "   宝塔面板："
+        log_warning "   - 进入网站设置 -> 配置文件"
+        log_warning "   - 在 root 下一行添加："
+    else
+        log_warning "   - 编辑您的站点配置文件"
+        log_warning "   - 在 server 块内 root 指令下一行添加："
+    fi
     echo
     echo "    include $SITE_ROOT/nginx/manager.conf;"
     echo
-    log_warning "   - 保存并重载配置"
-    log_warning "2. 访问安装向导: http://your-domain/install.php"
-    log_warning "（安装向导将自动处理数据库配置、迁移和初始化等其他安装步骤）"
+    log_warning "   - 保存并重载 Nginx 配置"
+    log_warning ""
+    log_warning "2. 访问安装向导: http://your-domain/install"
+    log_warning "   （安装向导将自动处理数据库配置、迁移和初始化等）"
     
     # 询问是否执行依赖安装
     echo
@@ -476,21 +430,36 @@ main() {
         log_info "跳过依赖安装，请确保已安装必需的运行环境"
     fi
     
-    # 宝塔面板特殊提示（放在最后）
+    # 定时任务和队列配置提示
+    echo
+    log_warning "=== 请手动配置以下服务 ==="
+    log_warning ""
+    log_warning "3. 定时任务配置："
     if check_bt_panel; then
-        echo
-        log_warning "=== 请在宝塔面板中手动完成以下配置 ==="
-        log_warning "1. 定时任务："
-        log_warning "   任务类型 Shell脚本"
-        log_warning "   执行周期 1分钟"
-        log_warning "   执行用户 www"
-        log_warning "   脚本内容 php $SITE_ROOT/backend/artisan schedule:run"
-        log_warning "2. 队列守护进程："
-        log_warning "   启动用户 www"
-        log_warning "   启动命令 php artisan queue:work --queue Task --tries 3 --delay 5 --max-jobs 1000 --max-time 3600 --memory 128 --timeout 60 --sleep 3"
-        log_warning "   进程目录 $SITE_ROOT/backend"
-        log_warning "================================="
+        log_warning "   宝塔面板："
+        log_warning "   - 任务类型: Shell脚本"
+        log_warning "   - 执行周期: 1分钟"
+        log_warning "   - 执行用户: www"
+        log_warning "   - 脚本内容: php $SITE_ROOT/backend/artisan schedule:run"
+    else
+        log_warning "   使用 crontab -e 添加："
+        log_warning "   $CRON_CMD"
     fi
+    log_warning ""
+    log_warning "4. 队列守护进程（可选）："
+    if check_bt_panel; then
+        log_warning "   宝塔面板 Supervisor："
+        log_warning "   - 启动用户: www"
+        log_warning "   - 启动命令: php artisan queue:work --queue Task"
+        log_warning "   - 进程目录: $SITE_ROOT/backend"
+    else
+        log_warning "   Supervisor 配置："
+        log_warning "   - 程序名: laravel-worker-$SITE_NAME"
+        log_warning "   - 命令: php artisan queue:work --queue Task"
+        log_warning "   - 目录: $SITE_ROOT/backend"
+        log_warning "   - 用户: $(stat -c "%U" "$SITE_ROOT")"
+    fi
+    log_warning "================================="
     
     # 安装流程完成提示
     echo

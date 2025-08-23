@@ -18,10 +18,6 @@
       ],
       "easy": [
         "config.json"
-      ],
-      "web": [
-        "index.php",
-        "favicon.ico"
       ]
     }
   },
