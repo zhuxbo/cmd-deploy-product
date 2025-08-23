@@ -532,7 +532,7 @@ save_preserve_files() {
     fi
     
     # 保存前端配置文件
-    for component in admin user easy; do
+    for component in admin user easy web; do
         if [ "$UPDATE_MODULE" = "all" ] || [ "$UPDATE_MODULE" = "$component" ]; then
             if [ -d "$SITE_ROOT/frontend/$component" ]; then
                 log_info "检查 $component 前端需要保护的文件..."
@@ -603,7 +603,7 @@ restore_preserve_files() {
     
     # 恢复前端文件
     if [ -d "$TEMP_PRESERVE_DIR/frontend" ]; then
-        for component in admin user easy; do
+        for component in admin user easy web; do
             if [ -d "$TEMP_PRESERVE_DIR/frontend/$component" ]; then
                 log_info "恢复 $component 前端保护文件..."
                 if command -v rsync >/dev/null 2>&1; then

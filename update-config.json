@@ -14,11 +14,14 @@
       "user": [
         "platform-config.json",
         "logo.svg",
-        "qrcode.png",
-        "favicon.ico"
+        "qrcode.png"
       ],
       "easy": [
         "config.json"
+      ],
+      "web": [
+        "index.php",
+        "favicon.ico"
       ]
     }
   },
