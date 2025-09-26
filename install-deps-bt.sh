@@ -589,13 +589,19 @@ remove_system_php() {
     fi
 }
 
-# 检测JDK版本
-check_jdk_version() {
-    log_info "检测 JDK 版本..."
+# 检测JRE版本
+check_jre_version() {
+    log_info "检测 JRE 版本..."
     
     # 检查 java 命令是否存在
     if ! command -v java >/dev/null 2>&1; then
         log_warning "未检测到 Java"
+        return 1
+    fi
+    
+    # 检查 keytool 命令是否存在（确保有证书工具）
+    if ! command -v keytool >/dev/null 2>&1; then
+        log_warning "未检测到 keytool"
         return 1
     fi
     
@@ -630,9 +636,9 @@ check_jdk_version() {
     fi
 }
 
-# 安装 JDK 17
-install_jdk17() {
-    log_info "开始安装 JDK 17..."
+# 安装 JRE 17
+install_jre17() {
+    log_info "开始安装 JRE 17..."
     
     # 检测系统类型
     local install_success=false
@@ -669,8 +675,8 @@ install_jdk17() {
             log_warning "更新软件包列表失败，继续尝试安装"
         fi
         
-        # 安装 JDK（显示实时进度）
-        log_info "正在安装 OpenJDK 17（请耐心等待）..."
+        # 安装 JRE（显示实时进度）
+        log_info "正在安装 OpenJRE 17（请耐心等待）..."
         
         # 禁用 needrestart 自动重启提示
         if [ -f /etc/needrestart/needrestart.conf ]; then
@@ -702,7 +708,7 @@ EOF
                  -o Dpkg::Options::="--force-confdef" \
                  -o Dpkg::Options::="--force-confold" \
                  -o APT::Get::Assume-Yes="true" \
-                 openjdk-17-jdk 2>&1 | \
+                 openjdk-17-jre 2>&1 | \
             stdbuf -oL grep -E "(Unpacking|Setting up|Processing|Error|openjdk)" | \
             while IFS= read -r line; do
                 if [[ "$line" == *"Setting up openjdk"* ]]; then
@@ -759,11 +765,11 @@ EOF
         # 检查安装结果 - 直接检查 java 命令是否可用
         if command -v java >/dev/null 2>&1 && java -version 2>&1 | grep -q "17"; then
             install_success=true
-            log_success "OpenJDK 17 安装完成"
+            log_success "OpenJRE 17 安装完成"
         elif [ -f /usr/lib/jvm/java-17-openjdk-amd64/bin/java ] || [ -f /usr/bin/java ]; then
             # 安装成功但可能需要刷新环境变量
             install_success=true
-            log_success "OpenJDK 17 安装完成（可能需要重新加载环境变量）"
+            log_success "OpenJRE 17 安装完成（可能需要重新加载环境变量）"
         else
             log_warning "安装可能未完成，尝试备用方案..."
             
@@ -773,10 +779,10 @@ EOF
                 --no-install-recommends \
                 -o Dpkg::Options::="--force-confdef" \
                 -o Dpkg::Options::="--force-confold" \
-                openjdk-17-jdk </dev/null >/dev/null 2>&1; then
+                openjdk-17-jre </dev/null >/dev/null 2>&1; then
                 if command -v java >/dev/null 2>&1 || [ -f /usr/lib/jvm/java-17-openjdk-amd64/bin/java ]; then
                     install_success=true
-                    log_success "OpenJDK 17 安装成功（通过简化方法）"
+                    log_success "OpenJRE 17 安装成功（通过简化方法）"
                 fi
             fi
         fi
@@ -798,25 +804,25 @@ EOF
         else
             log_info "检测到海外服务器，使用默认 YUM 源..."
         fi
-        log_info "使用 yum 安装 OpenJDK 17..."
+        log_info "使用 yum 安装 OpenJRE 17..."
         
         # 显示简化进度的 yum 安装
-        log_info "正在安装 OpenJDK 17（请耐心等待）..."
+        log_info "正在安装 OpenJRE 17（请耐心等待）..."
         
         # CentOS 8+ / RHEL 8+
-        if sudo yum install -y java-17-openjdk java-17-openjdk-devel 2>&1 | \
+        if sudo yum install -y java-17-openjdk 2>&1 | \
             grep -E "(Installing|Installed|Complete|Error)" | tail -n 5; then
             install_success=true
-            log_success "OpenJDK 17 安装完成"
+            log_success "OpenJRE 17 安装完成"
         else
             # CentOS 7 可能需要额外的仓库
             log_info "尝试启用额外仓库..."
             sudo yum install -y epel-release 2>&1 | tail -n 3
             
-            if sudo yum install -y java-17-openjdk java-17-openjdk-devel 2>&1 | \
+            if sudo yum install -y java-17-openjdk 2>&1 | \
                 grep -E "(Installing|Installed|Complete|Error)" | tail -n 5; then
                 install_success=true
-                log_success "OpenJDK 17 安装完成"
+                log_success "OpenJRE 17 安装完成"
             fi
         fi
     # Fedora 系统
@@ -832,53 +838,53 @@ EOF
         else
             log_info "检测到海外服务器，使用默认 DNF 源..."
         fi
-        log_info "使用 dnf 安装 OpenJDK 17..."
-        log_info "正在安装 OpenJDK 17（请耐心等待）..."
+        log_info "使用 dnf 安装 OpenJRE 17..."
+        log_info "正在安装 OpenJRE 17（请耐心等待）..."
         
-        if sudo dnf install -y java-17-openjdk java-17-openjdk-devel 2>&1 | \
+        if sudo dnf install -y java-17-openjdk 2>&1 | \
             grep -E "(Installing|Installed|Complete|Error)" | tail -n 5; then
             install_success=true
-            log_success "OpenJDK 17 安装完成"
+            log_success "OpenJRE 17 安装完成"
         fi
     # openSUSE 系统
     elif command -v zypper >/dev/null 2>&1; then
-        log_info "使用 zypper 安装 OpenJDK 17..."
-        log_info "正在安装 OpenJDK 17（请耐心等待）..."
+        log_info "使用 zypper 安装 OpenJRE 17..."
+        log_info "正在安装 OpenJRE 17（请耐心等待）..."
         
-        if sudo zypper install -y java-17-openjdk java-17-openjdk-devel 2>&1 | \
+        if sudo zypper install -y java-17-openjdk 2>&1 | \
             grep -E "(Installing|Installed|Complete|Error)" | tail -n 5; then
             install_success=true
-            log_success "OpenJDK 17 安装完成"
+            log_success "OpenJRE 17 安装完成"
         fi
     # Arch Linux
     elif command -v pacman >/dev/null 2>&1; then
-        log_info "使用 pacman 安装 OpenJDK 17..."
-        log_info "正在安装 OpenJDK 17（请耐心等待）..."
+        log_info "使用 pacman 安装 OpenJRE 17..."
+        log_info "正在安装 OpenJRE 17（请耐心等待）..."
         
         # 先更新包数据库
         sudo pacman -Sy 2>&1 | tail -n 3
         
-        if sudo pacman -S --noconfirm jdk17-openjdk 2>&1 | \
+        if sudo pacman -S --noconfirm jre17-openjdk 2>&1 | \
             grep -E "(installing|installed|error)" | tail -n 5; then
             install_success=true
-            log_success "OpenJDK 17 安装完成"
+            log_success "OpenJRE 17 安装完成"
         fi
     fi
     
     # 如果系统包管理器安装失败，尝试手动下载安装
     if [ "$install_success" = false ]; then
-        log_info "尝试手动下载安装 OpenJDK 17..."
+        log_info "尝试手动下载安装 OpenJRE 17..."
         
         # 确定系统架构
         local arch=$(uname -m)
-        local jdk_arch=""
+        local jre_arch=""
         
         case "$arch" in
             x86_64|amd64)
-                jdk_arch="x64"
+                jre_arch="x64"
                 ;;
             aarch64|arm64)
-                jdk_arch="aarch64"
+                jre_arch="aarch64"
                 ;;
             *)
                 log_error "不支持的系统架构: $arch"
@@ -886,42 +892,41 @@ EOF
                 ;;
         esac
         
-        # 下载 OpenJDK 17
-        local jdk_file="/tmp/openjdk-17.tar.gz"
-        local jdk_url=""
+        # 下载 OpenJRE 17
+        local jre_file="/tmp/openjre-17.tar.gz"
+        local jre_url=""
         
         if is_china_server; then
-            # 中国大陆使用清华镜像
-            jdk_url="https://mirrors.tuna.tsinghua.edu.cn/Adoptium/17/jdk/x64/linux/OpenJDK17U-jdk_${jdk_arch}_linux_hotspot_17.0.9_9.tar.gz"
-            log_info "从清华镜像下载 OpenJDK 17..."
+            # 中国大陆使用清华镜像（JRE版本）
+            jre_url="https://mirrors.tuna.tsinghua.edu.cn/Adoptium/17/jre/x64/linux/OpenJDK17U-jre_${jre_arch}_linux_hotspot_17.0.9_9.tar.gz"
+            log_info "从清华镜像下载 OpenJRE 17..."
         else
-            # 海外使用官方源
-            jdk_url="https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.9%2B9/OpenJDK17U-jdk_${jdk_arch}_linux_hotspot_17.0.9_9.tar.gz"
-            log_info "从官方源下载 OpenJDK 17..."
+            # 海外使用官方源（JRE版本）
+            jre_url="https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.9%2B9/OpenJDK17U-jre_${jre_arch}_linux_hotspot_17.0.9_9.tar.gz"
+            log_info "从官方源下载 OpenJRE 17..."
         fi
         
-        if curl -L -o "$jdk_file" "$jdk_url" >/dev/null 2>&1 || wget -O "$jdk_file" "$jdk_url" >/dev/null 2>&1; then
+        if curl -L -o "$jre_file" "$jre_url" >/dev/null 2>&1 || wget -O "$jre_file" "$jre_url" >/dev/null 2>&1; then
             # 解压到 /opt/java
             sudo mkdir -p /opt/java
-            if sudo tar -xzf "$jdk_file" -C /opt/java; then
+            if sudo tar -xzf "$jre_file" -C /opt/java; then
                 # 查找解压后的目录
-                local jdk_dir=$(ls -d /opt/java/jdk-17* 2>/dev/null | head -1)
+                local jre_dir=$(ls -d /opt/java/jdk-17* 2>/dev/null | head -1)
                 
-                if [ -n "$jdk_dir" ] && [ -d "$jdk_dir" ]; then
-                    # 创建符号链接
-                    sudo ln -sf "$jdk_dir/bin/java" /usr/bin/java
-                    sudo ln -sf "$jdk_dir/bin/javac" /usr/bin/javac
-                    sudo ln -sf "$jdk_dir/bin/jar" /usr/bin/jar
+                if [ -n "$jre_dir" ] && [ -d "$jre_dir" ]; then
+                    # 创建符号链接（JRE只需要java和keytool）
+                    sudo ln -sf "$jre_dir/bin/java" /usr/bin/java
+                    sudo ln -sf "$jre_dir/bin/keytool" /usr/bin/keytool
                     
                     # 设置 JAVA_HOME
-                    echo "export JAVA_HOME=$jdk_dir" | sudo tee /etc/profile.d/java.sh >/dev/null
+                    echo "export JAVA_HOME=$jre_dir" | sudo tee /etc/profile.d/java.sh >/dev/null
                     echo "export PATH=\$JAVA_HOME/bin:\$PATH" | sudo tee -a /etc/profile.d/java.sh >/dev/null
                     
                     install_success=true
-                    log_success "OpenJDK 17 手动安装成功"
+                    log_success "OpenJRE 17 手动安装成功"
                 fi
             fi
-            rm -f "$jdk_file"
+            rm -f "$jre_file"
         fi
     fi
     
@@ -933,17 +938,17 @@ EOF
         fi
         
         # 再次检查版本
-        if check_jdk_version; then
-            log_success "JDK 17 安装并验证成功"
+        if check_jre_version; then
+            log_success "JRE 17 安装并验证成功"
             return 0
         else
-            log_warning "JDK 安装后验证失败，请检查环境变量"
+            log_warning "JRE 安装后验证失败，请检查环境变量"
             return 1
         fi
     else
-        log_error "JDK 17 安装失败"
-        log_info "请手动安装 JDK 17 或更高版本："
-        log_info "  Ubuntu/Debian: sudo apt-get install openjdk-17-jdk"
+        log_error "JRE 17 安装失败"
+        log_info "请手动安装 JRE 17 或更高版本："
+        log_info "  Ubuntu/Debian: sudo apt-get install openjdk-17-jre"
         log_info "  CentOS/RHEL: sudo yum install java-17-openjdk"
         log_info "  Fedora: sudo dnf install java-17-openjdk"
         log_info "  或访问: https://adoptium.net/"
@@ -1629,12 +1634,12 @@ main() {
             ;;
     esac
     
-    # 3. 检查 JDK
+    # 3. 检查 JRE
     echo
-    log_info "检查 JDK 环境..."
-    if ! check_jdk_version; then
-        log_info "需要安装 JDK 17 或更高版本"
-        install_jdk17
+    log_info "检查 JRE 环境..."
+    if ! check_jre_version; then
+        log_info "需要安装 JRE 17 或更高版本"
+        install_jre17
     fi
     
     # 最终提示
@@ -1646,7 +1651,7 @@ main() {
         log_info "PHP 路径: /www/server/php/$PHP_VERSION/bin/php"
     fi
     
-    # 显示 JDK 版本
+    # 显示 JRE 版本
     if command -v java >/dev/null 2>&1; then
         local java_ver=$(java -version 2>&1 | head -1)
         log_info "Java 版本: $java_ver"
