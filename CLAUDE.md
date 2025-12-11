@@ -437,6 +437,11 @@ npm config set registry https://registry.npmmirror.com
 
 ## 最近更新
 
+- **2025-12-11**: update.sh 队列重启增强
+  - 后端部署完成后自动重启队列进程
+  - 宝塔环境：使用 `php artisan queue:restart` 发送重启信号
+  - 非宝塔环境：Supervisor 失败时回退到 artisan queue:restart
+
 - **2025-12-10**: 部署脚本功能增强
   - install.sh 和 update.sh 均自动替换 `frontend/web/web.conf` 中的 `__PROJECT_ROOT__` 路径
   - update.sh 后端更新后自动运行 `php artisan migrate --force` 和 `php artisan db:seed --force`

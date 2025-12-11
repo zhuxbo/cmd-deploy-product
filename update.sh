@@ -984,13 +984,31 @@ set_permissions() {
 # 重载服务
 reload_services() {
     log_info "重载服务..."
-    
+
     if check_bt_panel; then
-        log_warning "宝塔环境，请在面板中重载服务"
-        log_warning "- 重载 Nginx"
-        log_warning "- 重启 PHP-FPM"
-        log_warning "- 重启队列守护进程"
+        # 宝塔环境：FPM 模式下 Nginx 和 PHP-FPM 不需要重启
+        # 只需要重启队列让新代码生效
+        if [ "$UPDATE_MODULE" = "all" ] || [ "$UPDATE_MODULE" = "api" ]; then
+            log_info "重启队列进程..."
+            cd "$SITE_ROOT/backend"
+            PHP_CMD="php"
+            for ver in 85 84 83; do
+                if [ -x "/www/server/php/$ver/bin/php" ]; then
+                    PHP_CMD="/www/server/php/$ver/bin/php"
+                    break
+                fi
+            done
+
+            # 使用 artisan queue:restart 发送重启信号，让 worker 优雅重启
+            if $PHP_CMD artisan queue:restart 2>/dev/null; then
+                log_success "队列重启信号已发送"
+            else
+                log_warning "队列重启信号发送失败"
+            fi
+            cd "$SCRIPT_DIR"
+        fi
     else
+        # 非宝塔环境
         # 重载 Nginx（只在更新后端API或Nginx配置时）
         if [ "$UPDATE_MODULE" = "all" ] || [ "$UPDATE_MODULE" = "api" ] || [ "$UPDATE_MODULE" = "nginx" ]; then
             NGINX_RELOAD=$(jq -r '.services.nginx.reload_command' "$CONFIG_FILE")
@@ -1000,7 +1018,7 @@ reload_services() {
                 log_warning "Nginx 重载失败"
             fi
         fi
-        
+
         # 重启 PHP-FPM（仅在更新后端时）
         if [ "$UPDATE_MODULE" = "all" ] || [ "$UPDATE_MODULE" = "api" ]; then
             PHP_RESTART=$(jq -r '.services."php-fpm".restart_command' "$CONFIG_FILE")
@@ -1010,7 +1028,7 @@ reload_services() {
                 log_warning "PHP-FPM 重启失败"
             fi
         fi
-        
+
         # 重启队列（仅在更新后端时）
         if [ "$UPDATE_MODULE" = "all" ] || [ "$UPDATE_MODULE" = "api" ]; then
             if command -v supervisorctl &> /dev/null; then
@@ -1019,8 +1037,24 @@ reload_services() {
                 if eval "$QUEUE_RESTART" 2>/dev/null; then
                     log_success "队列已重启"
                 else
-                    log_warning "队列重启失败"
+                    # 尝试使用 artisan 命令
+                    cd "$SITE_ROOT/backend"
+                    if php artisan queue:restart 2>/dev/null; then
+                        log_success "队列重启信号已发送 (artisan queue:restart)"
+                    else
+                        log_warning "队列重启失败"
+                    fi
+                    cd "$SCRIPT_DIR"
                 fi
+            else
+                # 没有 Supervisor，尝试使用 artisan 命令
+                cd "$SITE_ROOT/backend"
+                if php artisan queue:restart 2>/dev/null; then
+                    log_success "队列重启信号已发送 (artisan queue:restart)"
+                else
+                    log_warning "队列重启失败，Supervisor 未安装"
+                fi
+                cd "$SCRIPT_DIR"
             fi
         fi
     fi
