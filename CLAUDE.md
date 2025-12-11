@@ -437,6 +437,11 @@ npm config set registry https://registry.npmmirror.com
 
 ## 最近更新
 
+- **2025-12-10**: 部署脚本功能增强
+  - install.sh 和 update.sh 均自动替换 `frontend/web/web.conf` 中的 `__PROJECT_ROOT__` 路径
+  - update.sh 后端更新后自动运行 `php artisan migrate --force` 和 `php artisan db:seed --force`
+  - 使用 `--force` 参数忽略 Laravel 生产模式提示
+
 - **2025-08-23**: 重大架构调整
   - **依赖管理模式变更**: install-deps.sh 从安装改为仅检查，要求管理员预先安装服务
   - **Nginx 配置方式变更**: 取消自动配置，改为手动引入 manager.conf

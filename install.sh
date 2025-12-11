@@ -244,11 +244,18 @@ deploy_files() {
 # 更新nginx配置路径
 update_nginx_config() {
     NGINX_CONF="$SITE_ROOT/nginx/manager.conf"
-    
+
     if [ -f "$NGINX_CONF" ]; then
         # 替换项目根目录路径
         sed -i "s|__PROJECT_ROOT__|$SITE_ROOT|g" "$NGINX_CONF"
         log_success "Nginx 配置路径已更新"
+    fi
+
+    # 更新 frontend/web/web.conf 配置路径
+    WEB_CONF="$SITE_ROOT/frontend/web/web.conf"
+    if [ -f "$WEB_CONF" ]; then
+        sed -i "s|__PROJECT_ROOT__|$SITE_ROOT|g" "$WEB_CONF"
+        log_success "frontend/web/web.conf 配置路径已更新"
     fi
 }
 

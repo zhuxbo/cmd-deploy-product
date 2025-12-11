@@ -797,7 +797,22 @@ optimize_backend() {
         $PHP_CMD artisan config:clear
         $PHP_CMD artisan route:clear
         $PHP_CMD artisan optimize
-        
+
+        # 运行数据库迁移和数据填充
+        log_info "运行数据库迁移..."
+        if $PHP_CMD artisan migrate --force; then
+            log_success "数据库迁移完成"
+        else
+            log_warning "数据库迁移失败，可能需要手动处理"
+        fi
+
+        log_info "运行数据填充..."
+        if $PHP_CMD artisan db:seed --force; then
+            log_success "数据填充完成"
+        else
+            log_warning "数据填充失败，可能需要手动处理"
+        fi
+
         # 删除安装文件和目录（如果存在）
         if [ -f "public/install.php" ]; then
             rm -f "public/install.php"
@@ -821,6 +836,13 @@ update_nginx_config() {
         log_info "更新 Nginx 配置路径..."
         sed -i "s|__PROJECT_ROOT__|$SITE_ROOT|g" "$SITE_ROOT/nginx/manager.conf"
         log_success "Nginx 配置路径已更新"
+    fi
+
+    # 更新 frontend/web/web.conf 配置路径
+    if [ "$UPDATE_MODULE" = "all" ] && [ -f "$SITE_ROOT/frontend/web/web.conf" ]; then
+        log_info "更新 frontend/web/web.conf 配置路径..."
+        sed -i "s|__PROJECT_ROOT__|$SITE_ROOT|g" "$SITE_ROOT/frontend/web/web.conf"
+        log_success "frontend/web/web.conf 配置路径已更新"
     fi
 }
 
