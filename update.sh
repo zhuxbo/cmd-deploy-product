@@ -791,6 +791,10 @@ optimize_backend() {
             log_info "Laravel 将使用基础自动加载器"
         fi
         
+        # 重新生成包发现缓存（构建时已清理开发环境缓存）
+        log_info "生成包发现缓存..."
+        $PHP_CMD artisan package:discover --ansi
+
         # 清理并优化 Laravel 缓存
         log_info "清理并优化 Laravel 缓存..."
         $PHP_CMD artisan cache:clear
