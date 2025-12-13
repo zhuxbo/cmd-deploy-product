@@ -760,7 +760,12 @@ optimize_backend() {
             else
                 COMPOSER_USER=$(stat -c "%U" "$SITE_ROOT")
             fi
-            
+
+            # 确保 bootstrap/cache 目录存在且可写
+            mkdir -p "$SITE_ROOT/backend/bootstrap/cache"
+            chown "$COMPOSER_USER:$COMPOSER_USER" "$SITE_ROOT/backend/bootstrap/cache"
+            chmod 775 "$SITE_ROOT/backend/bootstrap/cache"
+
             # 确保backend目录权限正确后再执行composer
             if [ "$EUID" -eq 0 ]; then
                 # 以root运行时，使用sudo切换到正确用户
