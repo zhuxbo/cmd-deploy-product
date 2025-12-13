@@ -770,7 +770,7 @@ optimize_backend() {
             if [ "$EUID" -eq 0 ]; then
                 # 以root运行时，使用sudo切换到正确用户
                 # 使用 timeout 避免卡住，设置环境变量
-                if timeout 30s sudo -u "$COMPOSER_USER" env COMPOSER_NO_INTERACTION=1 COMPOSER_PROCESS_TIMEOUT=30 composer dump-autoload --optimize --no-dev 2>/dev/null; then
+                if timeout 120s sudo -u "$COMPOSER_USER" env COMPOSER_NO_INTERACTION=1 COMPOSER_PROCESS_TIMEOUT=120 composer dump-autoload --optimize --no-dev 2>/dev/null; then
                     log_success "自动加载优化完成（包发现已自动执行）"
                 else
                     log_warning "自动加载优化失败，但不影响应用运行"
@@ -784,7 +784,7 @@ optimize_backend() {
             else
                 # 非root用户直接执行
                 # 使用 timeout 避免卡住
-                if timeout 30s env COMPOSER_NO_INTERACTION=1 COMPOSER_PROCESS_TIMEOUT=30 composer dump-autoload --optimize --no-dev 2>/dev/null; then
+                if timeout 120s env COMPOSER_NO_INTERACTION=1 COMPOSER_PROCESS_TIMEOUT=120 composer dump-autoload --optimize --no-dev 2>/dev/null; then
                     log_success "自动加载优化完成（包发现已自动执行）"
                 else
                     log_warning "自动加载优化失败，但不影响应用运行"
